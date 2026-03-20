@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, useDeferredValue } from 'react';
 import {
   CodexClient,
   type ConnectionState,
@@ -12,7 +12,6 @@ import {
   type ChatgptAuthTokensRefreshReason,
   type ChatgptAuthTokensRefreshResponse,
 } from '@codex-mobile/shared';
-import { ThreadView } from './components/ThreadView';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { getChatConfig, saveChatConfig, getSettingJson, setSettingJson, addChatMessage, getChatMessages, getAllChatHistory, searchChatHistory, type ChatHistoryEntry } from './lib/db';
@@ -20,6 +19,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { applyServerEventToThreadDetail, findThreadItem, mergeThreadDetailWithLocalState } from './state/threadState';
 import { RightSidebar, type RightSidebarTab } from './components/RightSidebar';
 import { CodeViewer, type OverlayView } from './components/CodeViewer';
+import { ThreadSidebar } from './components/ThreadSidebar';
+import { ThreadWorkspace } from './components/ThreadWorkspace';
 
 type ReasoningLevel = 'low' | 'medium' | 'high' | 'xhigh';
 type ThemeMode = 'dark' | 'light' | 'system';
@@ -310,15 +311,6 @@ const AUTONOMY_PRESETS: Record<Exclude<AutonomyModeValue, 'custom'>, { approvalP
     sandboxMode: 'workspace-write',
   },
 };
-
-function formatRelativeTime(unixSec: number): string {
-  const diff = Date.now() / 1000 - unixSec;
-  if (diff < 60) return 'now';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d`;
-  return new Date(unixSec * 1000).toLocaleDateString();
-}
 
 function folderName(cwd?: string): string {
   if (!cwd) return '';
@@ -917,7 +909,6 @@ export function App() {
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0);
   const [turnStartTime, setTurnStartTime] = useState<number | null>(null);
-  const [elapsedSec, setElapsedSec] = useState(0);
   const [messageHistory, setMessageHistory] = useState<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState(-1);
   const [userInputRequests, setUserInputRequests] = useState<UserInputRequest[]>([]);
@@ -940,10 +931,8 @@ export function App() {
   const [gitInfo, setGitInfo] = useState<{ branch: string; isDirty: boolean; addedLines: number; removedLines: number; ahead: number; behind: number; lastCommitSha?: string; lastCommitMsg?: string } | null>(null);
 
   const [attachedImages, setAttachedImages] = useState<Array<{ dataUrl: string; name: string }>>([]);
-  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [historyEntries, setHistoryEntries] = useState<import('./lib/db').ChatHistoryEntry[]>([]);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [pinnedThreads, setPinnedThreads] = usePersistedState<string[]>('codex-pinned-threads', []);
   const [threadCtxMenu, setThreadCtxMenu] = useState<{ threadId: string; x: number; y: number } | null>(null);
 
@@ -968,6 +957,8 @@ export function App() {
   const skillsRef = useRef<Array<{ name: string; path: string }>>([]);
   const isComposingRef = useRef(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deferredThreadSearch = useDeferredValue(threadSearch);
+  const deferredHistorySearchQuery = useDeferredValue(historySearchQuery);
 
   useEffect(() => { selectedThreadRef.current = selectedThread; }, [selectedThread]);
   useEffect(() => { threadDetailRef.current = threadDetail; }, [threadDetail]);
@@ -996,8 +987,9 @@ export function App() {
   useEffect(() => {
     if (sidebarView !== 'history') return;
     const load = async () => {
-      if (historySearchQuery.trim()) {
-        const result = await searchChatHistory(historySearchQuery.trim());
+      const query = deferredHistorySearchQuery.trim();
+      if (query) {
+        const result = await searchChatHistory(query);
         setHistoryEntries(result);
       } else {
         const result = await getAllChatHistory();
@@ -1005,19 +997,7 @@ export function App() {
       }
     };
     void load();
-  }, [sidebarView, historySearchQuery]);
-
-  // 滚动到底按钮：监听消息列表滚动
-  useEffect(() => {
-    const el = messagesContainerRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setShowScrollBtn(distFromBottom > 120);
-    };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [selectedThread]);
+  }, [sidebarView, deferredHistorySearchQuery]);
 
   useEffect(() => {
     if (!selectedThread) {
@@ -1051,10 +1031,6 @@ export function App() {
       return;
     }
     if (!turnStartTime) setTurnStartTime(Date.now());
-    const timer = setInterval(() => {
-      setElapsedSec(turnStartTime ? Math.floor((Date.now() - turnStartTime) / 1000) : 0);
-    }, 1000);
-    return () => clearInterval(timer);
   }, [isAgentActive, isSending, turnStartTime]);
 
   useEffect(() => {
@@ -1085,7 +1061,7 @@ export function App() {
   }, []);
 
   const threadGroups = useMemo<ThreadGroup[]>(() => {
-    const searchLower = threadSearch.toLowerCase();
+    const searchLower = deferredThreadSearch.toLowerCase();
     const projectFiltered = addedProjects.length > 0
       ? threads.filter((t) => {
           if (!t.cwd) return true;
@@ -1128,7 +1104,7 @@ export function App() {
       groups.push({ folder: '', cwd: '', threads: ungrouped });
     }
     return groups;
-  }, [threads, threadSearch, addedProjects]);
+  }, [threads, deferredThreadSearch, addedProjects]);
 
   const refreshAccountInfo = useCallback(async () => {
     try {
@@ -1917,7 +1893,7 @@ export function App() {
     if (connState === 'connected') handleListThreads();
   }, [showArchived, connState, handleListThreads]);
 
-  const handleLoadMoreThreads = async () => {
+  const handleLoadMoreThreads = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
@@ -1926,9 +1902,9 @@ export function App() {
       setNextCursor(result.nextCursor);
     } catch { /* ignore */ }
     setLoadingMore(false);
-  };
+  }, [loadingMore, nextCursor, showArchived]);
 
-  const handleReadThread = async (id: string) => {
+  const handleReadThread = useCallback(async (id: string) => {
     selectedThreadRef.current = id;
     threadDetailRef.current = null;
     pendingDeltaEventsRef.current = [];
@@ -1966,7 +1942,7 @@ export function App() {
         if (config.reasoning) setReasoning(config.reasoning as ReasoningLevel);
       }
     } catch { /* ignore */ }
-  };
+  }, [refreshThreadDetail, setReasoning, startPolling]);
 
   const handleNewThread = useCallback(async (cwd?: string) => {
     if (connState !== 'connected') {
@@ -1989,14 +1965,14 @@ export function App() {
     }
   }, [activeProjectCwd, applyNewThreadSelection, connState, startThreadWithConfigRecovery]);
 
-  const handleOpenInExplorer = async (cwd: string) => {
+  const handleOpenInExplorer = useCallback(async (cwd: string) => {
     try {
       await invoke('open_in_explorer', { path: cwd });
     } catch { /* ignore */ }
     setFolderMenu(null);
-  };
+  }, []);
 
-  const handleAddProject = async () => {
+  const handleAddProject = useCallback(async () => {
     try {
       const selected = await invoke<string | null>('pick_folder');
       if (selected) {
@@ -2008,25 +1984,25 @@ export function App() {
         setActiveProjectCwd(selected);
       }
     } catch { /* ignore */ }
-  };
+  }, [addedProjects, setAddedProjects]);
 
-  const handleRemoveProject = (cwd: string) => {
+  const handleRemoveProject = useCallback((cwd: string) => {
     const normalized = cwd.replace(/\\/g, '/').replace(/\/$/, '');
     setAddedProjects(addedProjects.filter(p => p.replace(/\\/g, '/').replace(/\/$/, '') !== normalized));
     setFolderMenu(null);
-  };
+  }, [addedProjects, setAddedProjects]);
 
-  const handleRemoveFolder = (cwd: string) => {
+  const handleRemoveFolder = useCallback((cwd: string) => {
     setThreads(prev => prev.filter(t => t.cwd !== cwd));
     setFolderMenu(null);
-  };
+  }, []);
 
-  const handleRenameFolder = (cwd: string) => {
+  const handleRenameFolder = useCallback((cwd: string) => {
     setRenamingFolder(cwd);
     setFolderMenu(null);
-  };
+  }, []);
 
-  const handleSaveFolderAlias = (cwd: string, alias: string) => {
+  const handleSaveFolderAlias = useCallback((cwd: string, alias: string) => {
     const trimmed = alias.trim();
     if (trimmed) {
       setFolderAlias({ ...folderAlias, [cwd]: trimmed });
@@ -2036,7 +2012,7 @@ export function App() {
       setFolderAlias(next);
     }
     setRenamingFolder(null);
-  };
+  }, [folderAlias, setFolderAlias]);
 
   const enqueuePendingMessage = useCallback((threadId: string, text: string) => {
     const id = `pending-${threadId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2194,17 +2170,15 @@ export function App() {
     } catch { /* ignore */ }
   }, [selectedThread, selectedModel, handleListThreads]);
 
-  const handleThreadContextMenu = useCallback((e: React.MouseEvent, threadId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setThreadCtxMenu({ threadId, x: e.clientX, y: e.clientY });
+  const handleOpenThreadContextMenu = useCallback((threadId: string, x: number, y: number) => {
+    setThreadCtxMenu({ threadId, x, y });
   }, []);
 
   const handlePinThread = useCallback((threadId: string) => {
     setPinnedThreads(
       pinnedThreads.includes(threadId)
         ? pinnedThreads.filter((id) => id !== threadId)
-        : [...pinnedThreads, threadId]
+        : [...pinnedThreads, threadId],
     );
     setThreadCtxMenu(null);
   }, [pinnedThreads, setPinnedThreads]);
@@ -2730,35 +2704,36 @@ export function App() {
     return false;
   };
 
-  const toggleGroup = (cwd: string) => {
+  const toggleGroup = useCallback((cwd: string) => {
     setCollapsedGroups(prev => {
       const next = new Set(prev);
       if (next.has(cwd)) next.delete(cwd);
       else next.add(cwd);
       return next;
     });
-  };
-
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 5000);
-    return () => clearTimeout(timer);
-  }, [toast]);
+  }, []);
 
   const lastTurn = threadDetail?.turns?.[threadDetail.turns.length - 1];
   const displayedThread = threadDetail ?? (isThreadLoading ? lastResolvedThreadDetail : null);
-  const selectedThreadSummary = selectedThread
-    ? threads.find((thread) => thread.id === selectedThread) ?? null
-    : null;
+  const selectedThreadSummary = useMemo(
+    () => (selectedThread ? threads.find((thread) => thread.id === selectedThread) ?? null : null),
+    [selectedThread, threads],
+  );
   const isShowingPreviousThreadWhileLoading =
     isThreadLoading &&
     !!selectedThread &&
     !!displayedThread &&
     displayedThread.id !== selectedThread;
   const isProcessing = !isShowingPreviousThreadWhileLoading && (isSending || isAgentActive || lastTurn?.status === 'inProgress');
-  const selectedThreadPendingMessages = selectedThread
-    ? pendingMessages.filter((message) => message.threadId === selectedThread)
-    : [];
+  const selectedThreadPendingMessages = useMemo(
+    () => (selectedThread ? pendingMessages.filter((message) => message.threadId === selectedThread) : []),
+    [pendingMessages, selectedThread],
+  );
+  const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreads), [pinnedThreads]);
+  const pinnedSidebarThreads = useMemo(
+    () => threads.filter((thread) => pinnedThreadIdSet.has(thread.id)),
+    [threads, pinnedThreadIdSet],
+  );
   const canSubmitInput = inputText.trim().length > 0;
   const composerDisabled = isShowingPreviousThreadWhileLoading;
   const composerPlaceholder = composerDisabled
@@ -2772,6 +2747,55 @@ export function App() {
       ? 'Enter to follow up, Esc to interrupt'
       : null;
   const autonomyDetail = autonomyMode === 'custom' ? getAutonomyModeSummary(codexConfig) : null;
+  const handleShowThreadHome = useCallback(() => {
+    setSelectedThread(null);
+    setThreadDetail(null);
+    setSidebarView('threads');
+  }, []);
+  const handleOpenAutomationsView = useCallback(() => {
+    setSidebarView('automations');
+  }, []);
+  const handleOpenSkillsView = useCallback(() => {
+    setSidebarView('skills');
+    void refreshSkills();
+  }, [refreshSkills]);
+  const handleOpenHistoryView = useCallback(() => {
+    setSidebarView('history');
+  }, []);
+  const handleOpenSettingsView = useCallback(() => {
+    setSidebarView('settings');
+  }, []);
+  const handleToggleArchived = useCallback(() => {
+    setShowArchived((prev) => !prev);
+  }, []);
+  const handleThreadSearchChange = useCallback((value: string) => {
+    setThreadSearch(value);
+  }, []);
+  const handleClearThreadSearch = useCallback(() => {
+    setThreadSearch('');
+  }, []);
+  const handleToggleFolderMenu = useCallback((cwd: string, x: number, y: number) => {
+    setFolderMenu((prev) => (prev?.cwd === cwd ? null : { cwd, x, y }));
+  }, []);
+  const handleCloseFolderMenu = useCallback(() => {
+    setFolderMenu(null);
+  }, []);
+  const handleCancelFolderRename = useCallback(() => {
+    setRenamingFolder(null);
+  }, []);
+  const handleCloseThreadContextMenu = useCallback(() => {
+    setThreadCtxMenu(null);
+  }, []);
+  const toggleRawJson = useCallback(() => {
+    setShowRawJson(!showRawJson);
+  }, [showRawJson]);
+  const handleInsertPrompt = useCallback((text: string) => {
+    setInputText(text);
+    textareaRef.current?.focus();
+  }, []);
+  const toggleRightSidebar = useCallback(() => {
+    setRightSidebarOpen(!rightSidebarOpen);
+  }, [rightSidebarOpen, setRightSidebarOpen]);
 
   useEffect(() => {
     if (isProcessing || !selectedThread) return;
@@ -2803,10 +2827,7 @@ export function App() {
       activeTab={rightSidebarTab}
       onTabChange={setRightSidebarTab}
       onOverlayView={setOverlayView}
-      onInsertPrompt={(text) => {
-        setInputText(text);
-        textareaRef.current?.focus();
-      }}
+      onInsertPrompt={handleInsertPrompt}
       width={rightSidebarWidth}
       onWidthChange={setRightSidebarWidth}
     />
@@ -2816,339 +2837,54 @@ export function App() {
     <>
       <div className="app-layout">
         {/* Sidebar */}
-        <aside className="sidebar" style={{ width: sidebarWidth }}>
-          <nav className="sidebar-nav">
-            <button
-              className="sidebar-nav-btn"
-              onClick={() => { setSelectedThread(null); setThreadDetail(null); setSidebarView('threads'); }}
-              disabled={connState !== 'connected'}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <line x1="8" y1="3" x2="8" y2="13" />
-                <line x1="3" y1="8" x2="13" y2="8" />
-              </svg>
-              New Thread
-            </button>
-            <button
-              className={`sidebar-nav-btn${sidebarView === 'automations' ? ' sidebar-nav-btn--active' : ''}`}
-              onClick={() => { setSidebarView('automations'); }}
-              disabled={connState !== 'connected'}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M8 2v4l2.5 1.5" />
-                <circle cx="8" cy="8" r="6" />
-              </svg>
-              Automations
-            </button>
-            <button
-              className={`sidebar-nav-btn${sidebarView === 'skills' ? ' sidebar-nav-btn--active' : ''}`}
-              onClick={async () => {
-                setSidebarView('skills');
-                await refreshSkills();
-              }}
-              disabled={connState !== 'connected'}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="2" width="5" height="5" rx="1" />
-                <rect x="9" y="2" width="5" height="5" rx="1" />
-                <rect x="2" y="9" width="5" height="5" rx="1" />
-                <rect x="9" y="9" width="5" height="5" rx="1" />
-              </svg>
-              Skills
-            </button>
-            <button
-              className={`sidebar-nav-btn${sidebarView === 'history' ? ' sidebar-nav-btn--active' : ''}`}
-              onClick={() => setSidebarView('history')}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="8" cy="8" r="6" />
-                <polyline points="8,5 8,8 10.5,10" />
-              </svg>
-              History
-            </button>
-          </nav>
-
-          <div className="sidebar-divider" />
-
-          <div className="sidebar-threads-header">
-            <span className="sidebar-threads-label">Threads</span>
-            <div className="sidebar-threads-actions">
-              <button
-                className="sidebar-icon-btn"
-                onClick={handleAddProject}
-                title="Add project folder"
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
-                  <line x1="8" y1="8" x2="8" y2="12" />
-                  <line x1="6" y1="10" x2="10" y2="10" />
-                </svg>
-              </button>
-              <button
-                className={`sidebar-icon-btn${showArchived ? ' sidebar-icon-btn--active' : ''}`}
-                onClick={() => setShowArchived(!showArchived)}
-                title={showArchived ? 'Show active threads' : 'Show archived threads'}
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="2" y="3" width="12" height="3" rx="1" />
-                  <path d="M3 6v6a1 1 0 001 1h8a1 1 0 001-1V6" />
-                  <path d="M6.5 9h3" />
-                </svg>
-              </button>
-              <button
-                className="sidebar-icon-btn"
-                onClick={handleListThreads}
-                title="Refresh threads"
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M2.5 8a5.5 5.5 0 0 1 9.3-4" strokeLinecap="round" />
-                  <path d="M13.5 8a5.5 5.5 0 0 1-9.3 4" strokeLinecap="round" />
-                  <polyline points="12,2 12,5 9,5" strokeLinecap="round" strokeLinejoin="round" />
-                  <polyline points="4,14 4,11 7,11" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {connState === 'connected' && (
-            <div className="sidebar-search">
-              <svg className="sidebar-search-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="7" cy="7" r="5" />
-                <path d="M11 11l3.5 3.5" />
-              </svg>
-              <input
-                className="sidebar-search-input"
-                value={threadSearch}
-                onChange={(e) => setThreadSearch(e.target.value)}
-                placeholder="Search threads... (Ctrl+K)"
-              />
-              {threadSearch && (
-                <button className="sidebar-search-clear" onClick={() => setThreadSearch('')}>
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                    <line x1="2" y1="2" x2="8" y2="8" />
-                    <line x1="8" y1="2" x2="2" y2="8" />
-                  </svg>
-                </button>
-              )}
-            </div>
-          )}
-
-          <div className="sidebar-thread-list">
-            {threads.length === 0 && connState === 'connected' && (
-              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
-                No threads yet.
-              </div>
-            )}
-
-            {pinnedThreads.length > 0 && (() => {
-              const pinned = threads.filter(t => pinnedThreads.includes(t.id));
-              if (pinned.length === 0) return null;
-              return (
-                <div className="thread-group">
-                  <div className="pinned-group-header">
-                    <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828 1a1 1 0 01.707.293l4.172 4.172a1 1 0 010 1.414l-1.586 1.586a1 1 0 01-1.414 0l-.464-.464-2.828 2.828.929.929a1 1 0 010 1.414l-.707.707a1 1 0 01-1.414 0L7 12.243l-3.536 3.536a1 1 0 01-1.414-1.414L5.586 11 4.172 9.586a1 1 0 010-1.414l.707-.707a1 1 0 011.414 0l.929.929 2.828-2.828-.464-.464a1 1 0 010-1.414l1.586-1.586A1 1 0 019.828 1z"/></svg>
-                    已固定
-                  </div>
-                  {pinned.map((t) => (
-                    <button
-                      key={t.id}
-                      className={`sidebar-thread-item sidebar-thread-item--ungrouped thread-item--pinned${selectedThread === t.id ? ' sidebar-thread-item--active' : ''}`}
-                      onClick={() => handleReadThread(t.id)}
-                      onContextMenu={(e) => handleThreadContextMenu(e, t.id)}
-                    >
-                      <div className="sidebar-thread-info">
-                        <div className="sidebar-thread-name">
-                          {t.status?.type === 'active' && <span className="active-dot" />}
-                          {t.name || t.preview || 'Untitled'}
-                        </div>
-                      </div>
-                      <span className="sidebar-thread-time">
-                        {formatRelativeTime(t.updatedAt ?? t.createdAt)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              );
-            })()}
-
-            {threadGroups.map((group) => {
-              if (!group.folder) {
-                return group.threads.map((t) => (
-                  <button
-                    key={t.id}
-                    className={`sidebar-thread-item sidebar-thread-item--ungrouped${selectedThread === t.id ? ' sidebar-thread-item--active' : ''}`}
-                    onClick={() => handleReadThread(t.id)}
-                    onContextMenu={(e) => handleThreadContextMenu(e, t.id)}
-                  >
-                    <div className="sidebar-thread-info">
-                      <div className="sidebar-thread-name">
-                        {t.status?.type === 'active' && <span className="active-dot" />}
-                        {t.name || t.preview || 'Untitled'}
-                      </div>
-                    </div>
-                    <span className="sidebar-thread-time">
-                      {formatRelativeTime(t.updatedAt ?? t.createdAt)}
-                    </span>
-                  </button>
-                ));
-              }
-
-              const isCollapsed = collapsedGroups.has(group.cwd);
-              const displayName = folderAlias[group.cwd] || group.folder;
-              return (
-                <div key={group.cwd} className="thread-group">
-                  <div className="thread-group-header">
-                    <button className="thread-group-toggle" onClick={() => toggleGroup(group.cwd)}>
-                      <svg
-                        className={`thread-group-chevron${isCollapsed ? '' : ' thread-group-chevron--open'}`}
-                        width="10" height="10" viewBox="0 0 10 10" fill="none"
-                        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
-                      >
-                        <path d="M3 1.5l4 3.5-4 3.5" />
-                      </svg>
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
-                      </svg>
-                      {renamingFolder === group.cwd ? (
-                        <input
-                          className="thread-group-rename"
-                          autoFocus
-                          defaultValue={displayName}
-                          onBlur={e => handleSaveFolderAlias(group.cwd, e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') handleSaveFolderAlias(group.cwd, (e.target as HTMLInputElement).value); if (e.key === 'Escape') setRenamingFolder(null); }}
-                          onClick={e => e.stopPropagation()}
-                        />
-                      ) : (
-                        <span className="thread-group-name">{displayName}</span>
-                      )}
-                    </button>
-                    <div className="thread-group-actions">
-                      <button className="thread-group-action-btn" onClick={e => { e.stopPropagation(); handleNewThread(group.cwd); }} title="New thread in this folder">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><line x1="6" y1="2" x2="6" y2="10" /><line x1="2" y1="6" x2="10" y2="6" /></svg>
-                      </button>
-                      <button
-                        className="thread-group-action-btn"
-                        onClick={e => { e.stopPropagation(); setFolderMenu(folderMenu?.cwd === group.cwd ? null : { cwd: group.cwd, x: e.clientX, y: e.clientY }); }}
-                        title="More actions"
-                      >
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                          <circle cx="6" cy="2.5" r="1" /><circle cx="6" cy="6" r="1" /><circle cx="6" cy="9.5" r="1" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                  {!isCollapsed && group.threads.map((t) => (
-                    <button
-                      key={t.id}
-                      className={`sidebar-thread-item${selectedThread === t.id ? ' sidebar-thread-item--active' : ''}${pinnedThreads.includes(t.id) ? ' thread-item--pinned' : ''}`}
-                      onClick={() => handleReadThread(t.id)}
-                      onContextMenu={(e) => handleThreadContextMenu(e, t.id)}
-                    >
-                      <div className="sidebar-thread-info">
-                        <div className="sidebar-thread-name">
-                          {t.status?.type === 'active' && <span className="active-dot" />}
-                          {t.name || t.preview || 'Untitled'}
-                        </div>
-                      </div>
-                      <span className="sidebar-thread-time">
-                        {formatRelativeTime(t.updatedAt ?? t.createdAt)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              );
-            })}
-            {nextCursor && (
-              <button
-                className="sidebar-load-more"
-                onClick={handleLoadMoreThreads}
-                disabled={loadingMore}
-              >
-                {loadingMore ? 'Loading...' : 'Load more threads'}
-              </button>
-            )}
-          </div>
-
-          {folderMenu && (
-            <>
-              <div className="ctx-backdrop" onClick={() => setFolderMenu(null)} />
-              <div className="ctx-menu" style={{ top: folderMenu.y, left: Math.min(folderMenu.x, 220) }}>
-                <button className="ctx-menu-item" onClick={() => handleOpenInExplorer(folderMenu.cwd)}>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
-                  </svg>
-                  Open in Explorer
-                </button>
-                <button className="ctx-menu-item" onClick={() => { handleNewThread(folderMenu.cwd); setFolderMenu(null); }}>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M4 8h8M8 4v8" />
-                  </svg>
-                  New Thread
-                </button>
-                <div className="ctx-menu-sep" />
-                <button className="ctx-menu-item" onClick={() => handleRenameFolder(folderMenu.cwd)}>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M11.5 1.5l3 3L5 14H2v-3z" />
-                  </svg>
-                  Rename
-                </button>
-                <button className="ctx-menu-item ctx-menu-item--danger" onClick={() => handleRemoveProject(folderMenu.cwd)}>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 5h10M5.5 5V3.5a1 1 0 011-1h3a1 1 0 011 1V5M6.5 7.5v4M9.5 7.5v4" />
-                    <path d="M4 5l.7 8.4a1 1 0 001 .9h4.6a1 1 0 001-.9L12 5" />
-                  </svg>
-                  Remove Project
-                </button>
-                <button className="ctx-menu-item ctx-menu-item--danger" onClick={() => handleRemoveFolder(folderMenu.cwd)}>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M2 5h12" />
-                    <path d="M4 5v8a1 1 0 001 1h6a1 1 0 001-1V5" />
-                  </svg>
-                  Hide Until Refresh
-                </button>
-              </div>
-            </>
-          )}
-
-          {threadCtxMenu && (
-            <>
-              <div className="ctx-backdrop" onClick={() => setThreadCtxMenu(null)} />
-              <div className="ctx-menu" style={{ top: Math.min(threadCtxMenu.y, window.innerHeight - 200), left: Math.min(threadCtxMenu.x, window.innerWidth - 180) }}>
-                <button className="ctx-menu-item" onClick={() => handleCtxRenameThread(threadCtxMenu.threadId)}>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3z" /></svg>
-                  重命名
-                </button>
-                <button className="ctx-menu-item" onClick={() => handlePinThread(threadCtxMenu.threadId)}>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9.828 1a1 1 0 01.707.293l4.172 4.172a1 1 0 010 1.414l-1.586 1.586a1 1 0 01-1.414 0l-.464-.464-2.828 2.828.929.929a1 1 0 010 1.414l-.707.707a1 1 0 01-1.414 0L7 12.243l-3.536 3.536a1 1 0 01-1.414-1.414L5.586 11 4.172 9.586a1 1 0 010-1.414l.707-.707a1 1 0 011.414 0l.929.929 2.828-2.828-.464-.464a1 1 0 010-1.414l1.586-1.586A1 1 0 019.828 1z"/></svg>
-                  {pinnedThreads.includes(threadCtxMenu.threadId) ? '取消置顶' : '置顶'}
-                </button>
-                <button className="ctx-menu-item" onClick={() => handleCtxForkThread(threadCtxMenu.threadId)}>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 3a2 2 0 100 4 2 2 0 000-4zM11 3a2 2 0 100 4 2 2 0 000-4zM5 9a2 2 0 100 4 2 2 0 000-4zM5 7v2M11 7c0 2-2 3-4 3" /></svg>
-                  Fork
-                </button>
-                <div className="ctx-menu-divider" />
-                <button className="ctx-menu-item ctx-menu-item--danger" onClick={() => handleCtxArchiveThread(threadCtxMenu.threadId)}>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4h12v1.5a1 1 0 01-1 1H3a1 1 0 01-1-1V4zM4 6.5v6a1 1 0 001 1h6a1 1 0 001-1v-6" /><path d="M6.5 9h3" /></svg>
-                  归档
-                </button>
-              </div>
-            </>
-          )}
-
-          <div className="sidebar-footer">
-            <button
-              className={`sidebar-footer-btn${sidebarView === 'settings' ? ' sidebar-footer-btn--active' : ''}`}
-              onClick={() => { setSidebarView('settings'); }}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <circle cx="8" cy="8" r="2.5" />
-                <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.1 3.1l1.4 1.4M11.5 11.5l1.4 1.4M3.1 12.9l1.4-1.4M11.5 4.5l1.4-1.4" strokeLinecap="round" />
-              </svg>
-              Settings
-            </button>
-          </div>
-          <div className="sidebar-resize-handle" onMouseDown={handleSidebarResizeStart} />
-        </aside>
+        <ThreadSidebar
+          width={sidebarWidth}
+          onResizeStart={handleSidebarResizeStart}
+          connState={connState}
+          sidebarView={sidebarView}
+          onShowThreadHome={handleShowThreadHome}
+          onOpenAutomations={handleOpenAutomationsView}
+          onOpenSkills={handleOpenSkillsView}
+          onOpenHistory={handleOpenHistoryView}
+          onOpenSettings={handleOpenSettingsView}
+          onAddProject={handleAddProject}
+          showArchived={showArchived}
+          onToggleArchived={handleToggleArchived}
+          onRefreshThreads={handleListThreads}
+          threadSearch={threadSearch}
+          onThreadSearchChange={handleThreadSearchChange}
+          onClearThreadSearch={handleClearThreadSearch}
+          threadCount={threads.length}
+          pinnedThreads={pinnedSidebarThreads}
+          threadGroups={threadGroups}
+          pinnedThreadIds={pinnedThreadIdSet}
+          selectedThreadId={selectedThread}
+          collapsedGroups={collapsedGroups}
+          folderAlias={folderAlias}
+          renamingFolder={renamingFolder}
+          onToggleGroup={toggleGroup}
+          onRenameFolderStart={handleRenameFolder}
+          onSaveFolderAlias={handleSaveFolderAlias}
+          onCancelFolderRename={handleCancelFolderRename}
+          onSelectThread={handleReadThread}
+          onOpenThreadContextMenu={handleOpenThreadContextMenu}
+          onNewThreadInFolder={handleNewThread}
+          folderMenu={folderMenu}
+          onToggleFolderMenu={handleToggleFolderMenu}
+          onCloseFolderMenu={handleCloseFolderMenu}
+          onOpenInExplorer={handleOpenInExplorer}
+          onRemoveProject={handleRemoveProject}
+          onRemoveFolder={handleRemoveFolder}
+          nextCursor={nextCursor}
+          loadingMore={loadingMore}
+          onLoadMoreThreads={handleLoadMoreThreads}
+          threadContextMenu={threadCtxMenu}
+          onCloseThreadContextMenu={handleCloseThreadContextMenu}
+          onRenameThreadFromContext={handleCtxRenameThread}
+          onPinThread={handlePinThread}
+          onForkThreadFromContext={handleCtxForkThread}
+          onArchiveThreadFromContext={handleCtxArchiveThread}
+        />
 
         {/* Main Content */}
         <main className="main-content">
@@ -3179,7 +2915,7 @@ export function App() {
               onClose={() => setOverlayView(null)}
               extraToolbarRight={
                 <>
-                  <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={() => setRightSidebarOpen(!rightSidebarOpen)} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
+                  <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={toggleRightSidebar} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" /><line x1="10" y1="2.5" x2="10" y2="13.5" /></svg>
                   </button>
                   <div className="toolbar-divider" />
@@ -3275,7 +3011,7 @@ export function App() {
                   </button>
                   <button
                     className="toolbar-icon-btn"
-                    onClick={() => setShowRawJson(!showRawJson)}
+                    onClick={toggleRawJson}
                     title={showRawJson ? 'Chat View' : 'Terminal output'}
                     disabled={isShowingPreviousThreadWhileLoading}
                   >
@@ -3317,7 +3053,7 @@ export function App() {
                   )}
                   <button
                     className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`}
-                    onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
+                    onClick={toggleRightSidebar}
                     title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}
                   >
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
@@ -3431,53 +3167,18 @@ export function App() {
                 </div>
               )}
 
-              <ThreadView
+              <ThreadWorkspace
                 thread={displayedThread}
                 isSending={isShowingPreviousThreadWhileLoading ? false : isSending}
                 isAgentActive={isShowingPreviousThreadWhileLoading ? false : isAgentActive}
                 showRawJson={showRawJson}
-                onToggleRawJson={() => setShowRawJson(!showRawJson)}
+                onToggleRawJson={toggleRawJson}
                 overrideIsProcessing={isShowingPreviousThreadWhileLoading ? false : undefined}
+                pendingMessages={selectedThreadPendingMessages}
+                statusHint={statusHint}
+                contextUsage={contextUsage}
+                turnStartTime={turnStartTime}
               />
-              {selectedThreadPendingMessages.length > 0 && isProcessing && (
-                <div className="pending-input-preview">
-                  <span className="pending-input-label">Queued messages ({selectedThreadPendingMessages.length}):</span>
-                  {selectedThreadPendingMessages.slice(0, 3).map((message) => (
-                    <span key={message.id} className="pending-input-msg">
-                      {message.text.length > 60 ? message.text.slice(0, 60) + '...' : message.text}
-                    </span>
-                  ))}
-                  {selectedThreadPendingMessages.length > 3 && <span className="pending-input-more">+{selectedThreadPendingMessages.length - 3} more</span>}
-                </div>
-              )}
-              {showScrollBtn && (
-                <button
-                  className="scroll-to-bottom-btn"
-                  onClick={() => {
-                    const el = messagesContainerRef.current;
-                    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-                  }}
-                  title="滚动到底部"
-                >
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="7" y1="2" x2="7" y2="12" />
-                    <polyline points="3,8 7,12 11,8" />
-                  </svg>
-                </button>
-              )}
-              {isProcessing && (
-                <div className="status-indicator">
-                  <span className="status-indicator-dot" />
-                  <span className="status-indicator-text">Working</span>
-                  <span className="status-indicator-time">{elapsedSec > 0 ? `${elapsedSec}s` : ''}</span>
-                  {contextUsage && (
-                    <span className="status-indicator-context">
-                      {contextUsage.percent}% context left
-                    </span>
-                  )}
-                  {statusHint && <span className="status-indicator-hint">{statusHint}</span>}
-                </div>
-              )}
               <div className="bottom-bar">
                 <div className="bottom-bar-input">
                   {slashOpen && popupItems.length > 0 && (
@@ -3666,7 +3367,7 @@ export function App() {
                     <div className="skeleton-line skeleton-line--medium" style={{ height: 14 }} />
                   </div>
                   <div className="thread-toolbar-right">
-                    <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={() => setRightSidebarOpen(!rightSidebarOpen)} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
+                    <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={toggleRightSidebar} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
                       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" /><line x1="10" y1="2.5" x2="10" y2="13.5" /></svg>
                     </button>
                     <div className="toolbar-divider" />
@@ -3700,7 +3401,7 @@ export function App() {
                     </button>
                   </div>
                   <div className="empty-toolbar-right">
-                    <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={() => setRightSidebarOpen(!rightSidebarOpen)} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
+                    <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={toggleRightSidebar} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
                       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" /><line x1="10" y1="2.5" x2="10" y2="13.5" /></svg>
                     </button>
                     <div className="toolbar-divider" />
@@ -3737,7 +3438,7 @@ export function App() {
                   <button className="empty-toolbar-title" onClick={() => { textareaRef.current?.focus(); }}>New Thread</button>
                 </div>
                 <div className="empty-toolbar-right">
-                  <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={() => setRightSidebarOpen(!rightSidebarOpen)} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
+                  <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={toggleRightSidebar} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" /><line x1="10" y1="2.5" x2="10" y2="13.5" /></svg>
                   </button>
                   <div className="toolbar-divider" />

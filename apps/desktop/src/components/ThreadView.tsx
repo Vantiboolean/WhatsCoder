@@ -39,20 +39,20 @@ type Props = {
 
 type ThreadListItem = {
   item: ThreadItem;
-  turnStatus: string;
-  turnError?: string | null;
 };
 
-export function ThreadView({ thread, isSending, isAgentActive, showRawJson, onToggleRawJson, overrideIsProcessing }: Props) {
+export const ThreadView = memo(function ThreadView({ thread, isSending, isAgentActive, showRawJson, onToggleRawJson, overrideIsProcessing }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const [visiblePages, setVisiblePages] = useState(INITIAL_PAGES);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const prevThreadIdRef = useRef<string | null>(null);
   const isInitialLoadRef = useRef(true);
 
   useEffect(() => {
     if (prevThreadIdRef.current !== thread.id) {
       setVisiblePages(INITIAL_PAGES);
+      setShowScrollBtn(false);
       prevThreadIdRef.current = thread.id;
       isInitialLoadRef.current = true;
     }
@@ -62,7 +62,7 @@ export function ThreadView({ thread, isSending, isAgentActive, showRawJson, onTo
     const items: ThreadListItem[] = [];
     for (const turn of thread.turns ?? []) {
       for (const item of turn.items ?? []) {
-        items.push({ item, turnStatus: turn.status, turnError: turn.error?.message ?? null });
+        items.push({ item });
       }
       if (turn.error?.message) {
         const parts: string[] = [turn.error.message];
@@ -78,8 +78,6 @@ export function ThreadView({ thread, isSending, isAgentActive, showRawJson, onTo
             id: `${turn.id}-error`,
             text: parts.join('\n\n'),
           },
-          turnStatus: turn.status,
-          turnError: turn.error.message,
         });
       }
     }
@@ -108,15 +106,41 @@ export function ThreadView({ thread, isSending, isAgentActive, showRawJson, onTo
 
   const lastTurn = thread.turns?.[thread.turns.length - 1];
   const isProcessing = overrideIsProcessing ?? Boolean(isSending || isAgentActive || lastTurn?.status === 'inProgress');
+  const rawJson = useMemo(
+    () => (showRawJson ? JSON.stringify(thread, null, 2) : ''),
+    [showRawJson, thread],
+  );
+
+  useEffect(() => {
+    const container = messagesRef.current;
+    if (!container || showRawJson) {
+      setShowScrollBtn(false);
+      return;
+    }
+
+    const updateScrollButton = () => {
+      const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      setShowScrollBtn((prev) => {
+        const next = distFromBottom > 120;
+        return prev === next ? prev : next;
+      });
+    };
+
+    updateScrollButton();
+    container.addEventListener('scroll', updateScrollButton, { passive: true });
+    return () => container.removeEventListener('scroll', updateScrollButton);
+  }, [showRawJson, thread.id]);
 
   useEffect(() => {
     if (isInitialLoadRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
       isInitialLoadRef.current = false;
+      setShowScrollBtn(false);
       return;
     }
 
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setShowScrollBtn(false);
   }, [allItems.length, isProcessing]);
 
   return (
@@ -155,7 +179,7 @@ export function ThreadView({ thread, isSending, isAgentActive, showRawJson, onTo
             background: 'var(--bg-tertiary)',
           }}
         >
-          {JSON.stringify(thread, null, 2)}
+          {rawJson}
         </pre>
       ) : (
         <div className="tv-messages" ref={messagesRef}>
@@ -181,9 +205,26 @@ export function ThreadView({ thread, isSending, isAgentActive, showRawJson, onTo
           <div ref={bottomRef} />
         </div>
       )}
+      {!showRawJson && showScrollBtn && (
+        <button
+          className="scroll-to-bottom-btn"
+          onClick={() => {
+            const container = messagesRef.current;
+            if (container) {
+              container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+            }
+          }}
+          title="Scroll to bottom"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="7" y1="2" x2="7" y2="12" />
+            <polyline points="3,8 7,12 11,8" />
+          </svg>
+        </button>
+      )}
     </div>
   );
-}
+});
 
 function CopyableCode({ children, className }: { children: ReactNode; className?: string }) {
   const [copied, setCopied] = useState(false);

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { memo, useCallback, useRef } from 'react';
 import { GitPanel } from './GitPanel';
 import { FileExplorer } from './FileExplorer';
 import { PromptsPanel } from './PromptsPanel';
@@ -6,7 +6,7 @@ import type { OverlayView } from './CodeViewer';
 
 export type RightSidebarTab = 'git' | 'files' | 'prompts';
 
-export function RightSidebar({
+export const RightSidebar = memo(function RightSidebar({
   cwd,
   activeTab,
   onTabChange,
@@ -100,4 +100,4 @@ export function RightSidebar({
       </div>
     </aside>
   );
-}
+});

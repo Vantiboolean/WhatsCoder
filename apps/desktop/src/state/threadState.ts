@@ -35,6 +35,14 @@ function cloneTurn(turn: Turn): Turn {
   };
 }
 
+function cloneTurnShell(turn: Turn): Turn {
+  return {
+    ...turn,
+    items: [...(turn.items ?? [])],
+    error: turn.error ? { ...turn.error } : turn.error,
+  };
+}
+
 function cloneThread(thread: ThreadDetail): ThreadDetail {
   return {
     ...thread,
@@ -102,7 +110,7 @@ function ensureTurn(turns: Turn[], turnId: string): number {
 
   if (optimisticIndex >= 0) {
     turns[optimisticIndex] = {
-      ...turns[optimisticIndex],
+      ...cloneTurnShell(turns[optimisticIndex]),
       id: turnId,
     };
     return optimisticIndex;
@@ -115,6 +123,12 @@ function ensureTurn(turns: Turn[], turnId: string): number {
     error: null,
   });
   return turns.length - 1;
+}
+
+function cloneTurnForWrite(turns: Turn[], turnIndex: number): Turn {
+  const nextTurn = cloneTurnShell(turns[turnIndex]);
+  turns[turnIndex] = nextTurn;
+  return nextTurn;
 }
 
 function replaceOptimisticUserItem(items: ThreadItem[], incoming: ThreadItem): boolean {
@@ -136,19 +150,20 @@ function replaceOptimisticUserItem(items: ThreadItem[], incoming: ThreadItem): b
 
 function upsertItem(turns: Turn[], turnId: string, incoming: ThreadItem) {
   const turnIndex = ensureTurn(turns, turnId);
-  const turn = turns[turnIndex];
-  const existingIndex = turn.items.findIndex((item) => item.id === incoming.id);
+  const turn = cloneTurnForWrite(turns, turnIndex);
+  const items = turn.items ?? [];
+  const existingIndex = items.findIndex((item) => item.id === incoming.id);
 
   if (existingIndex >= 0) {
-    turn.items[existingIndex] = cloneItem({ ...turn.items[existingIndex], ...incoming });
+    items[existingIndex] = cloneItem({ ...items[existingIndex], ...incoming });
     return;
   }
 
-  if (replaceOptimisticUserItem(turn.items, incoming)) {
+  if (replaceOptimisticUserItem(items, incoming)) {
     return;
   }
 
-  turn.items = [...turn.items, cloneItem(incoming)];
+  items.push(cloneItem(incoming));
 }
 
 function updateItem(
@@ -159,15 +174,16 @@ function updateItem(
   fallbackFactory: () => ThreadItem,
 ) {
   const turnIndex = ensureTurn(turns, turnId);
-  const turn = turns[turnIndex];
-  const itemIndex = turn.items.findIndex((item) => item.id === itemId);
+  const turn = cloneTurnForWrite(turns, turnIndex);
+  const items = turn.items ?? [];
+  const itemIndex = items.findIndex((item) => item.id === itemId);
 
   if (itemIndex >= 0) {
-    turn.items[itemIndex] = updater(turn.items[itemIndex]);
+    items[itemIndex] = updater(items[itemIndex]);
     return;
   }
 
-  turn.items = [...turn.items, updater(fallbackFactory())];
+  items.push(updater(fallbackFactory()));
 }
 
 function appendText(value: string | undefined, delta: string): string {
@@ -217,7 +233,8 @@ function setTurnState(
   updater: (turn: Turn) => Turn,
 ) {
   const turnIndex = ensureTurn(turns, turnId);
-  turns[turnIndex] = updater(turns[turnIndex]);
+  const turn = cloneTurnForWrite(turns, turnIndex);
+  turns[turnIndex] = updater(turn);
 }
 
 function toRealtimeMessageText(content: unknown): string {
@@ -481,9 +498,11 @@ export function applyServerEventToThreadDetail(
     return thread;
   }
 
-  const next = cloneThread(thread);
-  const turns = next.turns ?? [];
-  next.turns = turns;
+  const turns = [...(thread.turns ?? [])];
+  const next: ThreadDetail = {
+    ...thread,
+    turns,
+  };
 
   if (method === 'thread/started' && isRecord(params.thread)) {
     const startedThread = params.thread as Partial<ThreadDetail>;
