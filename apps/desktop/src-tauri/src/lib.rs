@@ -1,8 +1,171 @@
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri_plugin_dialog::DialogExt;
+
+// ── Codex App-Server process state ────────────────────────────────────────────
+static CODEX_SERVER_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
+static CODEX_BINARY_PATH: Mutex<Option<String>> = Mutex::new(None);
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexServerStatus {
+    pub running: bool,
+    pub pid: Option<u32>,
+}
+
+#[tauri::command]
+fn start_codex_server(port: Option<u16>, codex_path: Option<String>) -> Result<CodexServerStatus, String> {
+    let mut guard = CODEX_SERVER_PROCESS
+        .lock()
+        .map_err(|e| format!("Lock error: {e}"))?;
+
+    if let Some(ref mut child) = *guard {
+        match child.try_wait() {
+            Ok(None) => {
+                return Ok(CodexServerStatus {
+                    running: true,
+                    pid: Some(child.id()),
+                });
+            }
+            _ => {
+                *guard = None;
+            }
+        }
+    }
+
+    let listen_port = port.unwrap_or(4500);
+    let listen_url = format!("ws://127.0.0.1:{listen_port}");
+
+    let binary = codex_path
+        .or_else(|| CODEX_BINARY_PATH.lock().ok().and_then(|g| g.clone()))
+        .unwrap_or_else(|| "codex".to_string());
+
+    let child = Command::new(&binary)
+        .args(["app-server", "--listen", &listen_url])
+        .spawn()
+        .map_err(|e| format!("Failed to start codex app-server: {e}"))?;
+
+    if let Ok(mut path_guard) = CODEX_BINARY_PATH.lock() {
+        *path_guard = Some(binary);
+    }
+
+    let pid = child.id();
+    *guard = Some(child);
+
+    Ok(CodexServerStatus {
+        running: true,
+        pid: Some(pid),
+    })
+}
+
+#[tauri::command]
+fn stop_codex_server() -> Result<(), String> {
+    let mut guard = CODEX_SERVER_PROCESS
+        .lock()
+        .map_err(|e| format!("Lock error: {e}"))?;
+
+    if let Some(mut child) = guard.take() {
+        child.kill().map_err(|e| format!("Failed to kill process: {e}"))?;
+        let _ = child.wait();
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_codex_server_status() -> Result<CodexServerStatus, String> {
+    let mut guard = CODEX_SERVER_PROCESS
+        .lock()
+        .map_err(|e| format!("Lock error: {e}"))?;
+
+    if let Some(ref mut child) = *guard {
+        match child.try_wait() {
+            Ok(None) => {
+                return Ok(CodexServerStatus {
+                    running: true,
+                    pid: Some(child.id()),
+                });
+            }
+            _ => {
+                *guard = None;
+            }
+        }
+    }
+
+    Ok(CodexServerStatus {
+        running: false,
+        pid: None,
+    })
+}
+
+fn codex_exe_name() -> &'static str {
+    if cfg!(target_os = "windows") { "codex.exe" } else { "codex" }
+}
+
+#[tauri::command]
+fn find_codex_candidates() -> Vec<String> {
+    let mut candidates = Vec::new();
+    let exe = codex_exe_name();
+
+    if let Some(home) = dirs_next::home_dir() {
+        let mut paths: Vec<PathBuf> = vec![
+            home.join(".cargo").join("bin").join(exe),
+            home.join(".local").join("bin").join("codex"),
+        ];
+
+        if cfg!(target_os = "windows") {
+            if let Ok(appdata) = std::env::var("APPDATA") {
+                paths.push(PathBuf::from(&appdata).join("npm").join("codex.cmd"));
+                paths.push(PathBuf::from(&appdata).join("npm").join(exe));
+            }
+            if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+                paths.push(PathBuf::from(&localappdata).join("npm").join("codex.cmd"));
+                paths.push(PathBuf::from(&localappdata).join("npm").join(exe));
+            }
+        } else {
+            paths.push(PathBuf::from("/usr/local/bin/codex"));
+            paths.push(PathBuf::from("/opt/homebrew/bin/codex"));
+        }
+
+        if let Ok(nvm_dir) = std::env::var("NVM_DIR") {
+            let versions_dir = PathBuf::from(&nvm_dir).join("versions").join("node");
+            if let Ok(entries) = std::fs::read_dir(&versions_dir) {
+                for entry in entries.flatten() {
+                    let bin = entry.path().join("bin").join("codex");
+                    if bin.exists() {
+                        candidates.push(bin.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+
+        for p in paths {
+            if p.exists() {
+                let s = p.to_string_lossy().to_string();
+                if !candidates.contains(&s) {
+                    candidates.push(s);
+                }
+            }
+        }
+    }
+
+    candidates
+}
+
+#[tauri::command]
+fn pick_codex_binary(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let mut builder = app.dialog().file().set_title("Select Codex Binary");
+
+    if cfg!(target_os = "windows") {
+        builder = builder.add_filter("Executable", &["exe", "cmd", "bat"]);
+    }
+
+    let result = builder.blocking_pick_file();
+    Ok(result.map(|p| p.to_string()))
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -590,6 +753,18 @@ fn read_file_content(path: String, max_bytes: Option<u64>) -> Result<FileContent
     Ok(FileContent { content, truncated })
 }
 
+#[tauri::command]
+fn write_file_content(path: String, content: String) -> Result<(), String> {
+    let file_path = PathBuf::from(&path);
+    if let Some(parent) = file_path.parent() {
+        if !parent.exists() {
+            return Err("Parent directory does not exist".to_string());
+        }
+    }
+    std::fs::write(&file_path, content.as_bytes())
+        .map_err(|e| format!("Failed to write file: {e}"))
+}
+
 fn read_prompts_from_dir(dir: &PathBuf) -> Vec<PromptItem> {
     let mut prompts = Vec::new();
     if !dir.exists() {
@@ -676,6 +851,15 @@ fn open_in_explorer(path: String) -> Result<(), String> {
     Ok(())
 }
 
+fn cleanup_codex_server() {
+    if let Ok(mut guard) = CODEX_SERVER_PROCESS.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -696,6 +880,7 @@ pub fn run() {
             get_git_commit_diff,
             list_directory,
             read_file_content,
+            write_file_content,
             list_prompts,
             read_prompt,
             pick_folder,
@@ -704,7 +889,17 @@ pub fn run() {
             get_system_info,
             list_project_folders,
             open_in_explorer,
+            start_codex_server,
+            stop_codex_server,
+            get_codex_server_status,
+            find_codex_candidates,
+            pick_codex_binary,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                cleanup_codex_server();
+            }
+        });
 }
