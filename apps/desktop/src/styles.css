@@ -40,8 +40,8 @@
   --radius-md: 10px;
   --radius-lg: 14px;
 
-  --font-sans: "Inter", "Noto Sans SC", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", "Cascadia Code", Menlo, monospace;
+  --font-sans: "DM Sans", "Noto Sans SC", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "Fira Code", "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, monospace;
 
   --sidebar-width: 280px;
 }
@@ -85,6 +85,9 @@ html, body, #root {
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "kern" 1, "liga" 1;
 }
 
 input, textarea, select, button {
@@ -238,23 +241,23 @@ input, textarea, select, button {
 }
 
 .sidebar-nav {
-  padding: 12px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   flex-shrink: 0;
 }
 
 .sidebar-nav-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 7px 10px;
   background: none;
   border: none;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
   cursor: pointer;
   text-align: left;
   width: 100%;
@@ -293,16 +296,16 @@ input, textarea, select, button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
+  padding: 6px 12px 4px;
   flex-shrink: 0;
 }
 
 .sidebar-threads-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-tertiary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.07em;
 }
 
 .sidebar-threads-actions {
@@ -338,7 +341,7 @@ input, textarea, select, button {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px 8px;
+  padding: 3px 10px 6px;
   flex-shrink: 0;
   position: relative;
 }
@@ -408,7 +411,7 @@ input, textarea, select, button {
   gap: 0;
   padding: 0 4px 0 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   transition: background 0.1s;
 }
@@ -425,7 +428,7 @@ input, textarea, select, button {
   gap: 6px;
   flex: 1;
   min-width: 0;
-  padding: 6px 8px 6px 16px;
+  padding: 5px 6px 5px 12px;
   background: none;
   border: none;
   color: inherit;
@@ -552,9 +555,9 @@ input, textarea, select, button {
 
 .sidebar-thread-item {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  padding: 8px 12px 8px 32px;
+  padding: 6px 10px 6px 28px;
   background: none;
   border: none;
   width: 100%;
@@ -582,6 +585,8 @@ input, textarea, select, button {
 
 .sidebar-thread-name {
   font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -601,10 +606,11 @@ input, textarea, select, button {
 }
 
 .sidebar-thread-time {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-tertiary);
   flex-shrink: 0;
   white-space: nowrap;
+  letter-spacing: 0.01em;
 }
 
 /* Ungrouped threads */
@@ -617,19 +623,19 @@ input, textarea, select, button {
 .sidebar-footer {
   flex-shrink: 0;
   border-top: 1px solid var(--border-subtle);
-  padding: 8px 12px;
+  padding: 6px 10px;
 }
 
 .sidebar-footer-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 7px 10px;
   background: none;
   border: none;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12.5px;
   cursor: pointer;
   text-align: left;
   width: 100%;
@@ -3768,7 +3774,8 @@ input, textarea, select, button {
 
 /* ── Server Startup Dialog ── */
 
-.server-startup-overlay {
+.server-startup-overlay,
+.server-startup-page {
   position: fixed;
   inset: 0;
   background: var(--bg-primary);
@@ -3780,7 +3787,8 @@ input, textarea, select, button {
   animation: serverOverlayIn 0.3s ease-out;
 }
 
-.server-startup-overlay *:not(.server-startup-overlay) {
+.server-startup-overlay *:not(.server-startup-overlay),
+.server-startup-page *:not(.server-startup-page) {
   -webkit-app-region: no-drag;
 }
 
@@ -4930,12 +4938,12 @@ input, textarea, select, button {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px 4px;
+  padding: 5px 10px 3px;
   font-size: 10px;
   font-weight: 600;
   color: var(--text-tertiary);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
 }
 
 .thread-item--pinned {
@@ -5002,8 +5010,8 @@ input, textarea, select, button {
 
 .rs-tabs {
   display: flex;
-  gap: 0;
-  padding: 6px 8px;
+  gap: 2px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--border-primary);
   flex-shrink: 0;
   -webkit-app-region: drag;
@@ -5014,15 +5022,16 @@ input, textarea, select, button {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 6px 8px;
+  gap: 5px;
+  padding: 5px 6px;
   background: none;
   border: none;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
+  letter-spacing: 0.01em;
   transition: all 0.15s;
   -webkit-app-region: no-drag;
 }
