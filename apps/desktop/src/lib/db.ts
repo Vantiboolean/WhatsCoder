@@ -122,6 +122,66 @@ export async function getAllSettings(): Promise<Record<string, string>> {
   return result;
 }
 
+// ── Saved Connections ──
+
+export interface SavedConnectionRow {
+  id: string;
+  label: string;
+  host: string;
+  port: number;
+  is_default: number;
+  created_at: number;
+}
+
+export async function ensureConnectionsTable(): Promise<void> {
+  const database = await getDb();
+  await database.execute(`
+    CREATE TABLE IF NOT EXISTS saved_connections (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      host TEXT NOT NULL DEFAULT '127.0.0.1',
+      port INTEGER NOT NULL DEFAULT 4500,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER DEFAULT (strftime('%s','now'))
+    )
+  `);
+}
+
+export async function listConnections(): Promise<SavedConnectionRow[]> {
+  await ensureConnectionsTable();
+  const database = await getDb();
+  return database.select<SavedConnectionRow[]>(
+    'SELECT * FROM saved_connections ORDER BY is_default DESC, created_at ASC'
+  );
+}
+
+export async function saveConnection(conn: { id: string; label: string; host: string; port: number; isDefault?: boolean }): Promise<void> {
+  await ensureConnectionsTable();
+  const database = await getDb();
+  if (conn.isDefault) {
+    await database.execute('UPDATE saved_connections SET is_default = 0');
+  }
+  await database.execute(
+    `INSERT INTO saved_connections (id, label, host, port, is_default)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT(id) DO UPDATE SET label = $2, host = $3, port = $4, is_default = $5`,
+    [conn.id, conn.label, conn.host, conn.port, conn.isDefault ? 1 : 0]
+  );
+}
+
+export async function deleteConnection(id: string): Promise<void> {
+  await ensureConnectionsTable();
+  const database = await getDb();
+  await database.execute('DELETE FROM saved_connections WHERE id = $1', [id]);
+}
+
+export async function setDefaultConnection(id: string): Promise<void> {
+  await ensureConnectionsTable();
+  const database = await getDb();
+  await database.execute('UPDATE saved_connections SET is_default = 0');
+  await database.execute('UPDATE saved_connections SET is_default = 1 WHERE id = $1', [id]);
+}
+
 // ── Chat History (input history for up/down arrow) ──
 
 export async function addChatMessage(threadId: string, message: string): Promise<void> {
