@@ -501,24 +501,23 @@ fn parse_status_code(code: &str) -> &str {
     }
 }
 
-fn file_diff_stats(cwd: &str, path: &str, staged: bool) -> (u32, u32) {
-    let args = if staged {
-        vec!["diff", "--cached", "--numstat", "--", path]
+fn batch_diff_stats(cwd: &str, staged: bool) -> std::collections::HashMap<String, (u32, u32)> {
+    let args: Vec<&str> = if staged {
+        vec!["diff", "--cached", "--numstat"]
     } else {
-        vec!["diff", "--numstat", "--", path]
+        vec!["diff", "--numstat"]
     };
-    run_git(cwd, &args)
-        .and_then(|s| {
-            let parts: Vec<&str> = s.split('\t').collect();
-            if parts.len() >= 2 {
-                let a = parts[0].parse::<u32>().unwrap_or(0);
-                let d = parts[1].parse::<u32>().unwrap_or(0);
-                Some((a, d))
-            } else {
-                None
-            }
-        })
-        .unwrap_or((0, 0))
+    let output = run_git(cwd, &args).unwrap_or_default();
+    let mut map = std::collections::HashMap::new();
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 3 {
+            let a = parts[0].parse::<u32>().unwrap_or(0);
+            let d = parts[1].parse::<u32>().unwrap_or(0);
+            map.insert(parts[2].to_string(), (a, d));
+        }
+    }
+    map
 }
 
 #[tauri::command]
@@ -527,6 +526,9 @@ fn get_git_status_detailed(cwd: String) -> Result<GitDetailedStatus, String> {
         .unwrap_or_else(|| "unknown".to_string());
 
     let status_output = run_git(&cwd, &["status", "--porcelain"]).unwrap_or_default();
+
+    let staged_stats = batch_diff_stats(&cwd, true);
+    let unstaged_stats = batch_diff_stats(&cwd, false);
 
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
@@ -540,7 +542,7 @@ fn get_git_status_detailed(cwd: String) -> Result<GitDetailedStatus, String> {
         let file_path = line[3..].to_string();
 
         if index_status != " " && index_status != "?" {
-            let (a, d) = file_diff_stats(&cwd, &file_path, true);
+            let (a, d) = staged_stats.get(&file_path).copied().unwrap_or((0, 0));
             staged.push(GitFileStatus {
                 path: file_path.clone(),
                 status: parse_status_code(index_status).to_string(),
@@ -558,7 +560,7 @@ fn get_git_status_detailed(cwd: String) -> Result<GitDetailedStatus, String> {
             let (a, d) = if status_str == "untracked" {
                 (0, 0)
             } else {
-                file_diff_stats(&cwd, &file_path, false)
+                unstaged_stats.get(&file_path).copied().unwrap_or((0, 0))
             };
             unstaged.push(GitFileStatus {
                 path: file_path,
