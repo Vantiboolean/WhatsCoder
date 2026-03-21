@@ -519,8 +519,11 @@ export class CodexClient {
 
   // ── Config APIs ────────────────────────────────────────────
 
-  async readConfig(): Promise<unknown> {
-    return await this.send('config/read', { includeLayers: false });
+  async readConfig(opts?: { includeLayers?: boolean; cwd?: string | null }): Promise<unknown> {
+    return await this.send('config/read', {
+      includeLayers: opts?.includeLayers ?? false,
+      ...(opts?.cwd != null ? { cwd: opts.cwd } : {}),
+    });
   }
 
   // ── Skills APIs ────────────────────────────────────────────
@@ -533,6 +536,21 @@ export class CodexClient {
 
   async listMcpServers(): Promise<unknown> {
     return await this.send('mcpServerStatus/list', { cursor: null, limit: 50 });
+  }
+
+  async enableMcpServer(serverKey: string, enabled: boolean): Promise<void> {
+    await this.writeConfigValue(`mcp_servers.${serverKey}.enabled`, enabled, 'upsert');
+  }
+
+  async addMcpServer(
+    serverKey: string,
+    config: { command?: string; args?: string[]; url?: string; env?: Record<string, string> },
+  ): Promise<void> {
+    await this.writeConfigValue(`mcp_servers.${serverKey}`, { ...config, enabled: true }, 'upsert');
+  }
+
+  async removeMcpServer(serverKey: string): Promise<void> {
+    await this.writeConfigValue(`mcp_servers.${serverKey}`, null, 'replace');
   }
 
   // ── Fork ────────────────────────────────────────────────────
