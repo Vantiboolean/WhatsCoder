@@ -14,7 +14,7 @@ import {
 } from '@codex-mobile/shared';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
-import { getChatConfig, saveChatConfig, getSettingJson, setSettingJson, addChatMessage, getChatMessages, getAllChatHistory, searchChatHistory, type ChatHistoryEntry } from './lib/db';
+import { getChatConfig, saveChatConfig, getSettingJson, setSettingJson, addChatMessage, getChatMessages, getAllChatHistory, searchChatHistory, listConnections, saveConnection, deleteConnection, setDefaultConnection, type ChatHistoryEntry, type SavedConnectionRow } from './lib/db';
 import { invoke } from '@tauri-apps/api/core';
 import { applyServerEventToThreadDetail, findThreadItem, mergeThreadDetailWithLocalState } from './state/threadState';
 import { RightSidebar, type RightSidebarTab } from './components/RightSidebar';
@@ -902,6 +902,7 @@ export function App() {
   const [rightSidebarWidth, setRightSidebarWidth] = usePersistedState('codex-right-sidebar-width', 320);
   const [overlayView, setOverlayView] = useState<OverlayView>(null);
   const [addedProjects, setAddedProjects] = usePersistedState<string[]>('codex-added-projects', []);
+  const [appPhase, setAppPhase] = useState<'startup' | 'main'>('startup');
   const [showServerDialog, setShowServerDialog] = useState(false);
   const [serverStarting, setServerStarting] = useState(false);
   const [serverRunning, setServerRunning] = useState(false);
@@ -1213,6 +1214,7 @@ export function App() {
     const unsub = client.onStateChange((state) => {
       setConnState(state);
       if (state === 'connected') {
+        setAppPhase('main');
         setShowServerDialog(false);
         setServerLog('');
       }
@@ -1690,7 +1692,7 @@ export function App() {
 
   const refreshCodexConfig = useCallback(async () => {
     try {
-      const config = await clientRef.current.readConfig() as Record<string, unknown>;
+      const config = await clientRef.current.readConfig({ includeLayers: true }) as Record<string, unknown>;
       setCodexConfig(config);
       return config;
     } catch {
@@ -2957,6 +2959,7 @@ export function App() {
 
   return (
     <>
+      {appPhase !== 'startup' && (<>
       <div className="app-layout">
         {/* Sidebar */}
         <ThreadSidebar
@@ -3012,38 +3015,59 @@ export function App() {
         <main className="main-content">
           {sidebarView === 'settings' && <WindowControls className="window-controls--floating" />}
           {sidebarView === 'settings' ? (
-            <SettingsView url={url} onUrlChange={setUrl} connState={connState} accountInfo={accountInfo} rateLimits={rateLimits} mcpServers={mcpServers} client={clientRef.current} theme={theme} onThemeChange={setTheme} codexConfig={codexConfig} onWriteConfig={async (key, value) => { await writeConfigValueWithFallback(key, null, value); await refreshCodexConfig(); }} />
+            <div className="main-content-body">
+              <div className="main-content-primary">
+                <SettingsView url={url} onUrlChange={setUrl} connState={connState} accountInfo={accountInfo} rateLimits={rateLimits} mcpServers={mcpServers} client={clientRef.current} theme={theme} onThemeChange={setTheme} codexConfig={codexConfig} onWriteConfig={async (key, value) => { await writeConfigValueWithFallback(key, null, value); await refreshCodexConfig(); }} onRefreshMcp={refreshMcpServers} onConnect={(wsUrl) => void handleConnect(wsUrl)} onDisconnect={handleDisconnect} />
+              </div>
+              {rightSidebarEl}
+            </div>
           ) : sidebarView === 'automations' ? (
-            <AutomationsView />
+            <div className="main-content-body">
+              <div className="main-content-primary"><AutomationsView /></div>
+              {rightSidebarEl}
+            </div>
           ) : sidebarView === 'skills' ? (
-            <SkillsView skills={skills} onRefresh={async () => {
-              await refreshSkills();
-            }} />
+            <div className="main-content-body">
+              <div className="main-content-primary">
+                <SkillsView skills={skills} onRefresh={async () => { await refreshSkills(); }} />
+              </div>
+              {rightSidebarEl}
+            </div>
           ) : sidebarView === 'history' ? (
-            <HistoryPanel
-              entries={historyEntries}
-              searchQuery={historySearchQuery}
-              onSearchChange={setHistorySearchQuery}
-              threads={threads}
-              onSelectMessage={(msg) => {
-                setSidebarView('threads');
-                setTimeout(() => composerRef.current?.setDraftText(msg), 100);
-              }}
-            />
+            <div className="main-content-body">
+              <div className="main-content-primary">
+                <HistoryPanel
+                  entries={historyEntries}
+                  searchQuery={historySearchQuery}
+                  onSearchChange={setHistorySearchQuery}
+                  threads={threads}
+                  onSelectMessage={(msg) => {
+                    setSidebarView('threads');
+                    setTimeout(() => composerRef.current?.setDraftText(msg), 100);
+                  }}
+                />
+              </div>
+              {rightSidebarEl}
+            </div>
           ) : overlayView ? (
-            <CodeViewer
-              overlay={overlayView}
-              onClose={() => setOverlayView(null)}
-              extraToolbarRight={
-                <>
-                  <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={toggleRightSidebar} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
-                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" /><line x1="10" y1="2.5" x2="10" y2="13.5" /></svg>
-                  </button>
-                  <div className="toolbar-divider" />
-                  <WindowControls />
-                </>
-              }
-            />
+            <div className="main-content-body">
+              <div className="main-content-primary">
+                <CodeViewer
+                  overlay={overlayView}
+                  onClose={() => setOverlayView(null)}
+                  extraToolbarRight={
+                    <>
+                      <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={toggleRightSidebar} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
+                        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" /><line x1="10" y1="2.5" x2="10" y2="13.5" /></svg>
+                      </button>
+                      <div className="toolbar-divider" />
+                      <WindowControls />
+                    </>
+                  }
+                />
+              </div>
+              {rightSidebarEl}
+            </div>
           ) : displayedThread ? (
             <>
               {/* Top toolbar */}
@@ -3326,6 +3350,7 @@ export function App() {
                 onInterrupt={isProcessing ? handleInterrupt : undefined}
               />
                 </div>
+                {rightSidebarEl}
               </div>
             </>
           ) : selectedThread ? (
@@ -3358,6 +3383,7 @@ export function App() {
                       ))}
                     </div>
                   </div>
+                  {rightSidebarEl}
                 </div>
               </div>
             ) : (
@@ -3395,6 +3421,7 @@ export function App() {
                       </div>
                     </div>
                   </div>
+                  {rightSidebarEl}
                 </div>
               </div>
             )
@@ -3526,11 +3553,11 @@ export function App() {
                 </div>
               )}
                 </div>
+                {rightSidebarEl}
               </div>
             </div>
           )}
         </main>
-        {rightSidebarEl}
       </div>
 
       {showModelPicker && (
@@ -3618,9 +3645,10 @@ export function App() {
           </div>
         </div>
       )}
+      </>)}
 
-      {showServerDialog && (
-        <div className="server-startup-overlay">
+      {(appPhase === 'startup' || showServerDialog) && (
+        <div className={appPhase === 'startup' ? 'server-startup-page' : 'server-startup-overlay'}>
           <WindowControls className="window-controls--floating" />
           <div className="server-startup-card" onClick={e => e.stopPropagation()}>
             <div className="server-startup-header">
@@ -3749,7 +3777,7 @@ export function App() {
                     Reconnect
                   </button>
                 )}
-                <button className="server-startup-btn-ghost" onClick={() => setShowServerDialog(false)}>
+                <button className="server-startup-btn-ghost" onClick={() => { setShowServerDialog(false); setAppPhase('main'); }}>
                   Manual Setup
                 </button>
               </div>
@@ -4767,10 +4795,432 @@ function SkillsView({ skills, onRefresh }: { skills: SkillDetail[]; onRefresh?: 
   );
 }
 
-type SettingsTab = 'general' | 'appearance' | 'config' | 'personalization' | 'mcp' | 'git' | 'archived';
+function ConnectionsPanel({ currentUrl, connState, onConnect, onDisconnect }: {
+  currentUrl: string;
+  connState: ConnectionState;
+  onConnect: (url: string) => void;
+  onDisconnect: () => void;
+}) {
+  const [connections, setConnections] = useState<SavedConnectionRow[]>([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [label, setLabel] = useState('');
+  const [host, setHost] = useState('127.0.0.1');
+  const [port, setPort] = useState('4500');
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try { setConnections(await listConnections()); } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const connectedUrl = connState === 'connected' ? currentUrl : null;
+
+  const resetForm = () => {
+    setLabel(''); setHost('127.0.0.1'); setPort('4500');
+    setShowAdd(false); setEditingId(null);
+  };
+
+  const handleSave = async (makeDefault = false) => {
+    const trimLabel = label.trim() || `${host}:${port}`;
+    const id = editingId ?? `conn-${Date.now()}`;
+    const portNum = parseInt(port, 10) || 4500;
+    await saveConnection({ id, label: trimLabel, host: host.trim() || '127.0.0.1', port: portNum, isDefault: makeDefault });
+    resetForm();
+    await refresh();
+  };
+
+  const handleDelete = async (id: string) => {
+    await deleteConnection(id);
+    setConfirmDelete(null);
+    await refresh();
+  };
+
+  const handleSetDefault = async (id: string) => {
+    await setDefaultConnection(id);
+    await refresh();
+  };
+
+  const buildUrl = (c: SavedConnectionRow) => `ws://${c.host}:${c.port}`;
+
+  const startEdit = (c: SavedConnectionRow) => {
+    setEditingId(c.id);
+    setLabel(c.label);
+    setHost(c.host);
+    setPort(String(c.port));
+    setShowAdd(true);
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12,
+    background: 'var(--bg-secondary)', color: 'var(--text-primary)',
+    border: '1px solid var(--border-default)', borderRadius: 6,
+    padding: '6px 10px', boxSizing: 'border-box',
+  };
+
+  return (
+    <div className="settings-panel">
+      <h2>Connections</h2>
+      <p className="settings-desc">Manage connections to Codex app-server instances. You can run multiple servers on different ports or remote hosts.</p>
+
+      {connections.length > 0 ? (
+        <div className="settings-section">
+          <h3>Saved Connections</h3>
+          {connections.map((c) => {
+            const wsUrl = buildUrl(c);
+            const isConnected = connectedUrl === wsUrl;
+            return (
+              <div key={c.id} className="settings-row" style={{ alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                  <span className={`sidebar-conn-dot sidebar-conn-dot--${isConnected ? 'connected' : 'disconnected'}`} />
+                  <div style={{ minWidth: 0, overflow: 'hidden' }}>
+                    <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {c.label}
+                      {c.is_default ? <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 6 }}>DEFAULT</span> : null}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{wsUrl}</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  {isConnected ? (
+                    <button className="btn-small" onClick={onDisconnect} style={{ fontSize: 11 }}>Disconnect</button>
+                  ) : (
+                    <button className="btn-small btn-primary" onClick={() => onConnect(wsUrl)} style={{ fontSize: 11 }}>Connect</button>
+                  )}
+                  <button className="btn-small" onClick={() => startEdit(c)} style={{ fontSize: 11 }}>Edit</button>
+                  {!c.is_default && (
+                    <button className="btn-small" onClick={() => handleSetDefault(c.id)} style={{ fontSize: 11 }}>Set Default</button>
+                  )}
+                  {confirmDelete === c.id ? (
+                    <div style={{ display: 'flex', gap: 3 }}>
+                      <button className="btn-small" style={{ fontSize: 11, color: 'var(--status-error)' }} onClick={() => handleDelete(c.id)}>Confirm</button>
+                      <button className="btn-small" style={{ fontSize: 11 }} onClick={() => setConfirmDelete(null)}>Cancel</button>
+                    </div>
+                  ) : (
+                    <button className="btn-small" onClick={() => setConfirmDelete(c.id)} style={{ fontSize: 11 }}>×</button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="empty-section-card">
+          <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
+            No saved connections. Add one below to get started.
+          </span>
+        </div>
+      )}
+
+      <div className="settings-section">
+        {showAdd ? (
+          <>
+            <h3>{editingId ? 'Edit Connection' : 'Add Connection'}</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div>
+                <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Label</label>
+                <input style={inputStyle} value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Local Server" />
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Host</label>
+                  <input style={inputStyle} value={host} onChange={e => setHost(e.target.value)} placeholder="127.0.0.1" />
+                </div>
+                <div style={{ width: 100 }}>
+                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Port</label>
+                  <input style={inputStyle} value={port} onChange={e => setPort(e.target.value)} placeholder="4500" type="number" />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn-small btn-primary" onClick={() => handleSave(false)}>
+                  {editingId ? 'Update' : 'Save'}
+                </button>
+                {!editingId && <button className="btn-small" onClick={() => handleSave(true)}>Save as Default</button>}
+                <button className="btn-small" onClick={resetForm}>Cancel</button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <button className="btn-small btn-primary" onClick={() => { resetForm(); setShowAdd(true); }} style={{ marginTop: 4 }}>
+            + Add Connection
+          </button>
+        )}
+      </div>
+
+      <div className="settings-section">
+        <h3>Quick Connect</h3>
+        <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
+          Connect directly without saving. The current URL from the General tab is used.
+        </p>
+        <div className="settings-row">
+          <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{currentUrl}</label>
+          {connState === 'connected' ? (
+            <button className="btn-small" onClick={onDisconnect}>Disconnect</button>
+          ) : (
+            <button className="btn-small btn-primary" onClick={() => onConnect(currentUrl)}>Connect</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function McpSettingsPanel({ mcpServers, client, onRefresh }: {
+  mcpServers: Array<{ name: string; status: string }>;
+  client: CodexClient;
+  onRefresh: () => Promise<void>;
+}) {
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addName, setAddName] = useState('');
+  const [addType, setAddType] = useState<'stdio' | 'sse'>('stdio');
+  const [addCommand, setAddCommand] = useState('');
+  const [addArgs, setAddArgs] = useState('');
+  const [addUrl, setAddUrl] = useState('');
+  const [addEnvText, setAddEnvText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [togglingServer, setTogglingServer] = useState<string | null>(null);
+  const [removingServer, setRemovingServer] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const resetForm = () => {
+    setAddName('');
+    setAddCommand('');
+    setAddArgs('');
+    setAddUrl('');
+    setAddEnvText('');
+    setAddType('stdio');
+    setShowAddForm(false);
+    setError(null);
+  };
+
+  const handleAdd = async () => {
+    const key = addName.trim().replace(/\s+/g, '-').toLowerCase();
+    if (!key) { setError('Server name is required'); return; }
+
+    const config: Record<string, unknown> = {};
+    if (addType === 'stdio') {
+      if (!addCommand.trim()) { setError('Command is required for stdio servers'); return; }
+      config.command = addCommand.trim();
+      if (addArgs.trim()) {
+        config.args = addArgs.split(/\s+/).filter(Boolean);
+      }
+    } else {
+      if (!addUrl.trim()) { setError('URL is required for SSE servers'); return; }
+      config.url = addUrl.trim();
+    }
+
+    if (addEnvText.trim()) {
+      const env: Record<string, string> = {};
+      for (const line of addEnvText.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.includes('=')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim();
+        if (key) env[key] = val;
+      }
+      if (Object.keys(env).length > 0) config.env = env;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      await client.addMcpServer(key, config as { command?: string; args?: string[]; url?: string; env?: Record<string, string> });
+      resetForm();
+      await onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add server');
+    }
+    setSaving(false);
+  };
+
+  const handleToggle = async (serverName: string, currentStatus: string) => {
+    setTogglingServer(serverName);
+    try {
+      const shouldEnable = currentStatus === 'disabled' || currentStatus === 'stopped';
+      await client.enableMcpServer(serverName, shouldEnable);
+      await onRefresh();
+    } catch { /* ignore */ }
+    setTogglingServer(null);
+  };
+
+  const handleRemove = async (serverName: string) => {
+    setRemovingServer(serverName);
+    try {
+      await client.removeMcpServer(serverName);
+      setConfirmRemove(null);
+      await onRefresh();
+    } catch { /* ignore */ }
+    setRemovingServer(null);
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12,
+    background: 'var(--bg-secondary)', color: 'var(--text-primary)',
+    border: '1px solid var(--border-default)', borderRadius: 6,
+    padding: '6px 10px', boxSizing: 'border-box',
+  };
+
+  return (
+    <div className="settings-panel">
+      <h2>MCP Servers</h2>
+      <p className="settings-desc">Connect external tools and data sources via the Model Context Protocol.</p>
+
+      {mcpServers.length > 0 ? (
+        <div className="settings-section">
+          <h3>Servers ({mcpServers.length})</h3>
+          {mcpServers.map((s) => (
+            <div key={s.name} className="settings-row" style={{ alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                <span className={`sidebar-conn-dot sidebar-conn-dot--${s.status === 'running' ? 'connected' : 'disconnected'}`} />
+                <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</label>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                <span style={{ fontSize: 11, color: s.status === 'running' ? 'var(--status-active)' : 'var(--text-tertiary)', textTransform: 'capitalize', minWidth: 52, textAlign: 'right' }}>
+                  {s.status}
+                </span>
+                <button
+                  className="btn-small"
+                  disabled={togglingServer === s.name}
+                  onClick={() => handleToggle(s.name, s.status)}
+                  style={{ minWidth: 60, fontSize: 11 }}
+                >
+                  {togglingServer === s.name ? '...' : s.status === 'running' ? 'Disable' : 'Enable'}
+                </button>
+                {confirmRemove === s.name ? (
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button className="btn-small" style={{ fontSize: 11, color: 'var(--status-error)' }} disabled={removingServer === s.name} onClick={() => handleRemove(s.name)}>
+                      {removingServer === s.name ? '...' : 'Confirm'}
+                    </button>
+                    <button className="btn-small" style={{ fontSize: 11 }} onClick={() => setConfirmRemove(null)}>Cancel</button>
+                  </div>
+                ) : (
+                  <button className="btn-small" style={{ fontSize: 11 }} onClick={() => setConfirmRemove(s.name)}>Remove</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-section-card">
+          <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
+            No MCP servers configured. Add one below or configure servers in your Codex config.
+          </span>
+        </div>
+      )}
+
+      <div className="settings-section">
+        {showAddForm ? (
+          <>
+            <h3>Add MCP Server</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Server Name *</label>
+                  <input style={inputStyle} value={addName} onChange={e => setAddName(e.target.value)} placeholder="e.g. my-server" />
+                </div>
+                <div style={{ width: 120 }}>
+                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Type</label>
+                  <select value={addType} onChange={e => setAddType(e.target.value as 'stdio' | 'sse')} style={{ ...inputStyle, cursor: 'pointer' }}>
+                    <option value="stdio">stdio</option>
+                    <option value="sse">SSE (HTTP)</option>
+                  </select>
+                </div>
+              </div>
+
+              {addType === 'stdio' ? (
+                <>
+                  <div>
+                    <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Command *</label>
+                    <input style={inputStyle} value={addCommand} onChange={e => setAddCommand(e.target.value)} placeholder="e.g. npx, uvx, node" />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Arguments (space-separated)</label>
+                    <input style={inputStyle} value={addArgs} onChange={e => setAddArgs(e.target.value)} placeholder="e.g. -y @modelcontextprotocol/server-filesystem ." />
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>URL *</label>
+                  <input style={inputStyle} value={addUrl} onChange={e => setAddUrl(e.target.value)} placeholder="e.g. http://localhost:3001/sse" />
+                </div>
+              )}
+
+              <div>
+                <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Environment Variables (one per line: KEY=VALUE)</label>
+                <textarea
+                  style={{ ...inputStyle, resize: 'vertical', minHeight: 48 }}
+                  rows={2}
+                  value={addEnvText}
+                  onChange={e => setAddEnvText(e.target.value)}
+                  placeholder="API_KEY=sk-..."
+                />
+              </div>
+
+              {error && <div style={{ color: 'var(--status-error)', fontSize: 12 }}>{error}</div>}
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn-small btn-primary" disabled={saving} onClick={handleAdd}>
+                  {saving ? 'Adding...' : 'Add Server'}
+                </button>
+                <button className="btn-small" onClick={resetForm}>Cancel</button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <button className="btn-small btn-primary" onClick={() => setShowAddForm(true)} style={{ marginTop: 4 }}>
+            + Add MCP Server
+          </button>
+        )}
+      </div>
+
+      <div className="settings-section">
+        <h3>Recommended</h3>
+        <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
+          Popular MCP servers you can add with one click.
+        </p>
+        {[
+          { name: 'filesystem', desc: 'File system access', cmd: 'npx', args: '-y @modelcontextprotocol/server-filesystem .' },
+          { name: 'playwright', desc: 'Browser automation', cmd: 'npx', args: '-y @playwright/mcp@latest' },
+          { name: 'memory', desc: 'Persistent memory store', cmd: 'npx', args: '-y @modelcontextprotocol/server-memory' },
+        ].map((rec) => {
+          const isInstalled = mcpServers.some(s => s.name === rec.name);
+          return (
+            <div key={rec.name} className="settings-row">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{rec.name}</label>
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{rec.desc}</span>
+              </div>
+              <button
+                className="btn-small"
+                disabled={isInstalled}
+                onClick={async () => {
+                  try {
+                    await client.addMcpServer(rec.name, {
+                      command: rec.cmd,
+                      args: rec.args.split(' ').filter(Boolean),
+                    });
+                    await onRefresh();
+                  } catch { /* ignore */ }
+                }}
+              >
+                {isInstalled ? 'Installed' : 'Add'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+type SettingsTab = 'general' | 'connections' | 'appearance' | 'config' | 'personalization' | 'mcp' | 'git' | 'archived';
 
 const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'general', label: 'General' },
+  { id: 'connections', label: 'Connections' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'config', label: 'Configuration' },
   { id: 'personalization', label: 'Personalization' },
@@ -4891,6 +5341,9 @@ function SettingsView({
   onThemeChange,
   codexConfig,
   onWriteConfig,
+  onRefreshMcp,
+  onConnect,
+  onDisconnect,
 }: {
   url: string;
   onUrlChange: (url: string) => void;
@@ -4903,6 +5356,9 @@ function SettingsView({
   onThemeChange: (t: ThemeMode) => void;
   codexConfig: Record<string, unknown> | null;
   onWriteConfig?: (key: string, value: unknown) => Promise<void>;
+  onRefreshMcp?: () => Promise<unknown>;
+  onConnect?: (url: string) => void;
+  onDisconnect?: () => void;
 }) {
   const [tab, setTab] = useState<SettingsTab>('general');
   const [archivedThreads, setArchivedThreads] = useState<ThreadSummary[]>([]);
@@ -5064,6 +5520,15 @@ function SettingsView({
           </div>
         )}
 
+        {tab === 'connections' && (
+          <ConnectionsPanel
+            currentUrl={url}
+            connState={connState}
+            onConnect={(wsUrl) => { onUrlChange(wsUrl); onConnect?.(wsUrl); }}
+            onDisconnect={() => onDisconnect?.()}
+          />
+        )}
+
         {tab === 'appearance' && (
           <div className="settings-panel">
             <h2>Appearance</h2>
@@ -5099,7 +5564,7 @@ function SettingsView({
         {tab === 'config' && (
           <div className="settings-panel">
             <h2>Configuration</h2>
-            <p className="settings-desc">Configure approval policy and sandbox settings. These are managed in your Codex config.toml file.</p>
+            <p className="settings-desc">Configure approval policy and sandbox settings. Config is resolved from multiple layers (user → project → system).</p>
             <div className="settings-section">
               <h3>Autonomy Preset</h3>
               <div className="settings-row">
@@ -5127,11 +5592,61 @@ function SettingsView({
                 </span>
               </div>
             </div>
+            {codexConfig && Array.isArray((codexConfig as Record<string, unknown>).layers) && (
+              <div className="settings-section">
+                <h3>Config Layers</h3>
+                <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
+                  Configuration is merged from these sources (highest priority first):
+                </p>
+                {((codexConfig as Record<string, unknown>).layers as Array<Record<string, unknown>>).map((layer, i) => {
+                  const name = (layer.name as Record<string, unknown> | undefined);
+                  const layerType = typeof name?.type === 'string' ? name.type : 'unknown';
+                  const file = typeof name?.file === 'string' ? name.file : null;
+                  const dotCodexFolder = typeof name?.dotCodexFolder === 'string' ? name.dotCodexFolder : null;
+                  const filePath = file ?? (dotCodexFolder ? `${dotCodexFolder}/config.toml` : null);
+                  return (
+                    <div key={i} className="settings-row" style={{ alignItems: 'flex-start' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <label style={{ textTransform: 'capitalize', fontWeight: 500 }}>{layerType}</label>
+                        {filePath && (
+                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{filePath}</span>
+                        )}
+                      </div>
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                        {layer.version != null ? `v${layer.version}` : ''}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {codexConfig && typeof (codexConfig as Record<string, unknown>).origins === 'object' && (codexConfig as Record<string, unknown>).origins != null && (
+              <div className="settings-section">
+                <h3>Config Origins</h3>
+                <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
+                  Shows which layer each config key originates from.
+                </p>
+                {Object.entries((codexConfig as Record<string, unknown>).origins as Record<string, unknown>)
+                  .filter(([, v]) => v != null)
+                  .slice(0, 30)
+                  .map(([key, origin]) => {
+                    const o = origin as Record<string, unknown> | null;
+                    const originName = o?.name as Record<string, unknown> | undefined;
+                    const originType = typeof originName?.type === 'string' ? originName.type : '?';
+                    return (
+                      <div key={key} className="settings-row">
+                        <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{key}</label>
+                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'capitalize' }}>{originType}</span>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
             {codexConfig && (
               <div className="settings-section">
-                <h3>Raw Config</h3>
+                <h3>Effective Config</h3>
                 <pre className="settings-text-block" style={{ fontFamily: 'var(--font-mono)', fontSize: 12, maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {JSON.stringify(codexConfig, null, 2)}
+                  {JSON.stringify(getConfigRoot(codexConfig) ?? codexConfig, null, 2)}
                 </pre>
               </div>
             )}
@@ -5189,45 +5704,9 @@ function SettingsView({
         )}
 
         {tab === 'mcp' && (
-          <div className="settings-panel">
-            <h2>MCP Servers</h2>
-            <p className="settings-desc">Connect external tools and data sources.</p>
-            {mcpServers.length > 0 ? (
-              <div className="settings-section">
-                <h3>Connected Servers</h3>
-                {mcpServers.map((s, i) => (
-                  <div key={i} className="settings-row">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span className={`sidebar-conn-dot sidebar-conn-dot--${s.status === 'running' ? 'connected' : 'disconnected'}`} />
-                      <label>{s.name}</label>
-                    </div>
-                    <span style={{
-                      fontSize: 12,
-                      color: s.status === 'running' ? 'var(--status-active)' : 'var(--text-tertiary)',
-                      textTransform: 'capitalize',
-                    }}>
-                      {s.status}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="empty-section-card">
-                <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
-                  No MCP servers connected. Configure servers in your Codex config.
-                </span>
-              </div>
-            )}
-            <div className="settings-section">
-              <h3>Recommended</h3>
-              {['Linear', 'Notion', 'Figma', 'Playwright'].map((name) => (
-                <div key={name} className="settings-row">
-                  <label>{name}</label>
-                  <button className="btn-small" disabled>Install</button>
-                </div>
-              ))}
-            </div>
-          </div>
+          <McpSettingsPanel mcpServers={mcpServers} client={client} onRefresh={async () => {
+            if (onRefreshMcp) await onRefreshMcp();
+          }} />
         )}
 
         {tab === 'git' && (
