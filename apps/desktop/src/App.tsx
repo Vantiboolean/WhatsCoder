@@ -902,8 +902,18 @@ export function App() {
   const [rightSidebarWidth, setRightSidebarWidth] = usePersistedState('codex-right-sidebar-width', 320);
   const [overlayView, setOverlayView] = useState<OverlayView>(null);
   const [addedProjects, setAddedProjects] = usePersistedState<string[]>('codex-added-projects', []);
+  const [showServerDialog, setShowServerDialog] = useState(false);
+  const [serverStarting, setServerStarting] = useState(false);
+  const [serverRunning, setServerRunning] = useState(false);
+  const [serverLog, setServerLog] = useState('');
+  const serverManagedRef = useRef(false);
+  const [codexBinPath, setCodexBinPath] = usePersistedState('codex-bin-path', '');
+  const [codexCandidates, setCodexCandidates] = useState<string[]>([]);
+  const codexBinPathRef = useRef(codexBinPath);
+  const urlRef = useRef(url);
 
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const selectedThreadRef = useRef<string | null>(null);
   const threadDetailRef = useRef<ThreadDetail | null>(null);
   const composerRef = useRef<ChatComposerHandle>(null);
@@ -919,6 +929,7 @@ export function App() {
   const deferredThreadSearch = useDeferredValue(threadSearch);
   const deferredHistorySearchQuery = useDeferredValue(historySearchQuery);
 
+  useEffect(() => { urlRef.current = url; }, [url]);
   useEffect(() => { selectedThreadRef.current = selectedThread; }, [selectedThread]);
   useEffect(() => { threadDetailRef.current = threadDetail; }, [threadDetail]);
   useEffect(() => {
@@ -1194,7 +1205,13 @@ export function App() {
 
   useEffect(() => {
     const client = clientRef.current;
-    const unsub = client.onStateChange((state) => setConnState(state));
+    const unsub = client.onStateChange((state) => {
+      setConnState(state);
+      if (state === 'connected') {
+        setShowServerDialog(false);
+        setServerLog('');
+      }
+    });
     const unsubNotif = client.onNotification((method, params) => {
       const threadId = typeof params.threadId === 'string' ? params.threadId : undefined;
       const selectedId = selectedThreadRef.current;
@@ -1792,14 +1809,273 @@ export function App() {
     } catch { /* handled by state listener */ }
   };
 
-  // 自动连接：应用启动时无感连接，无需用户手动操作
+  const extractPort = useCallback((wsUrl: string): number => {
+    try {
+      const u = new URL(wsUrl);
+      return parseInt(u.port, 10) || 4500;
+    } catch {
+      return 4500;
+    }
+  }, []);
+
+  const waitForServerReady = useCallback(async (wsUrl: string, maxAttempts = 20, delayMs = 500): Promise<boolean> => {
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const ws = new WebSocket(wsUrl);
+          const timer = setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 2000);
+          ws.onopen = () => { clearTimeout(timer); ws.close(); resolve(); };
+          ws.onerror = () => { clearTimeout(timer); ws.close(); reject(new Error('error')); };
+        });
+        return true;
+      } catch {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+    return false;
+  }, []);
+
+  const startHeartbeat = useCallback(() => {
+    if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+    heartbeatTimerRef.current = setInterval(async () => {
+      if (!serverManagedRef.current) return;
+      const currentUrl = urlRef.current;
+      try {
+        const status = await invoke<{ running: boolean; pid: number | null }>('get_codex_server_status');
+        setServerRunning(status.running);
+        if (!status.running) {
+          setServerLog('Server process exited, restarting...');
+          try {
+            const port = extractPort(currentUrl);
+            const restart = await invoke<{ running: boolean; pid: number | null }>('start_codex_server', { port });
+            if (restart.running) {
+              setServerLog('Server restarted, reconnecting...');
+              const ready = await waitForServerReady(currentUrl, 15, 600);
+              if (ready) {
+                setServerLog('');
+                await handleConnect(currentUrl);
+              } else {
+                setServerLog('Server restarted but connection timed out');
+              }
+            }
+          } catch (err) {
+            setServerLog(`Restart failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        } else if (clientRef.current.state !== 'connected' && clientRef.current.state !== 'connecting') {
+          setServerLog('Connection lost, reconnecting...');
+          try {
+            await handleConnect(currentUrl);
+            setServerLog('');
+          } catch {
+            // auto-reconnect in CodexClient will keep trying
+          }
+        }
+      } catch {
+        // invoke failed, tauri layer issue
+      }
+    }, 5000);
+  }, [extractPort, waitForServerReady, handleConnect]);
+
+  useEffect(() => { codexBinPathRef.current = codexBinPath; }, [codexBinPath]);
+
+  const fetchCodexCandidates = useCallback(async () => {
+    try {
+      const paths = await invoke<string[]>('find_codex_candidates');
+      setCodexCandidates(paths);
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleBrowseCodexBinary = useCallback(async () => {
+    try {
+      const selected = await invoke<string | null>('pick_codex_binary');
+      if (selected) {
+        setCodexBinPath(selected);
+      }
+    } catch { /* ignore */ }
+  }, [setCodexBinPath]);
+
+  const handleStartServer = useCallback(async () => {
+    setServerStarting(true);
+    setServerLog('Starting codex server...');
+    try {
+      const port = extractPort(url);
+      const codexPath = codexBinPathRef.current || undefined;
+      const result = await invoke<{ running: boolean; pid: number | null }>('start_codex_server', { port, codexPath });
+      if (result.running) {
+        serverManagedRef.current = true;
+        setServerRunning(true);
+        setServerLog('Server started, waiting for it to be ready...');
+        const ready = await waitForServerReady(url, 20, 500);
+        if (ready) {
+          setServerLog('Connecting...');
+          try {
+            await handleConnect(url);
+            setShowServerDialog(false);
+            setServerLog('');
+            startHeartbeat();
+          } catch {
+            setServerLog('Server is ready but connection failed. Click "Retry Connection" to try again.');
+          }
+        } else {
+          setServerLog('Server started but not responding. Try again or check logs.');
+        }
+      } else {
+        setServerLog('Failed to start server process.');
+      }
+    } catch (err) {
+      setServerLog(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      fetchCodexCandidates();
+    } finally {
+      setServerStarting(false);
+    }
+  }, [url, extractPort, waitForServerReady, handleConnect, startHeartbeat, fetchCodexCandidates]);
+
+  const handleStopServer = useCallback(async () => {
+    try {
+      await invoke('stop_codex_server');
+      serverManagedRef.current = false;
+      setServerRunning(false);
+      if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+    } catch { /* ignore */ }
+  }, []);
+
+  // Auto-connect on startup: try connecting, if fails auto-start server
   useEffect(() => {
-    void handleConnect(url);
+    let cancelled = false;
+
+    const autoStartServer = async () => {
+      if (cancelled) return;
+      setShowServerDialog(true);
+      setServerStarting(true);
+      setServerLog('Starting codex server...');
+      try {
+        const port = extractPort(url);
+        const codexPath = codexBinPathRef.current || undefined;
+        const result = await invoke<{ running: boolean; pid: number | null }>('start_codex_server', { port, codexPath });
+        if (cancelled) return;
+        if (result.running) {
+          serverManagedRef.current = true;
+          setServerRunning(true);
+          setServerLog('Server started, waiting for it to be ready...');
+          const ready = await waitForServerReady(url, 20, 500);
+          if (cancelled) return;
+          if (ready) {
+            setServerLog('Connecting...');
+            try {
+              await handleConnect(url);
+              if (!cancelled) {
+                setShowServerDialog(false);
+                setServerLog('');
+                startHeartbeat();
+              }
+            } catch {
+              if (!cancelled) {
+                setServerLog('Server is ready but connection failed. Click "Retry Connection" to try again.');
+              }
+            }
+          } else {
+            setServerLog('Server started but not responding. Try again or check logs.');
+          }
+        } else {
+          setServerLog('Failed to start server process.');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setServerLog(`Error: ${err instanceof Error ? err.message : String(err)}`);
+          fetchCodexCandidates();
+        }
+      } finally {
+        if (!cancelled) setServerStarting(false);
+      }
+    };
+
+    (async () => {
+      // First try a quick probe without auto-reconnect to avoid flooding errors
+      try {
+        await clientRef.current.connect(url, { autoReconnect: false });
+        // Connection succeeded - server is already running
+        if (cancelled) return;
+        const result = await clientRef.current.listThreads({ limit: 50 });
+        setThreads(result.data);
+        setNextCursor(result.nextCursor);
+        let availableModels: ModelInfo[] = [];
+        try {
+          const m = await clientRef.current.listModels();
+          availableModels = m;
+          setModels(m);
+        } catch { /* models optional */ }
+        try {
+          await refreshAccountInfo();
+        } catch { /* account optional */ }
+        try {
+          await refreshMcpServers();
+        } catch { /* mcp optional */ }
+        const config = await refreshCodexConfig();
+        const configuredModel = getStringConfigValue(config, 'model');
+        if (configuredModel && availableModels.some((model) => model.id === configuredModel)) {
+          setSelectedModel(configuredModel);
+        } else {
+          const defaultModel = availableModels.find((model) => model.isDefault);
+          if (defaultModel) setSelectedModel(defaultModel.id);
+        }
+        // Check if we're managing this server process
+        try {
+          const status = await invoke<{ running: boolean; pid: number | null }>('get_codex_server_status');
+          if (!cancelled && status.running) {
+            serverManagedRef.current = true;
+            setServerRunning(true);
+            startHeartbeat();
+          }
+        } catch { /* ignore */ }
+      } catch {
+        // Connection failed - stop the client to prevent reconnect loops
+        clientRef.current.disconnect();
+        if (cancelled) return;
+        try {
+          const status = await invoke<{ running: boolean; pid: number | null }>('get_codex_server_status');
+          if (cancelled) return;
+          if (status.running) {
+            // Server process exists but connection failed, wait for it
+            serverManagedRef.current = true;
+            setServerRunning(true);
+            setShowServerDialog(true);
+            setServerLog('Server is running, waiting for connection...');
+            const ready = await waitForServerReady(url, 15, 600);
+            if (!cancelled && ready) {
+              try {
+                await handleConnect(url);
+                if (!cancelled) {
+                  setShowServerDialog(false);
+                  setServerLog('');
+                  startHeartbeat();
+                }
+              } catch { /* dialog stays open */ }
+            }
+          } else {
+            // Server not running - auto-start it
+            await autoStartServer();
+          }
+        } catch {
+          if (!cancelled) {
+            await autoStartServer();
+          }
+        }
+      }
+    })();
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cleanup heartbeat on unmount
+  useEffect(() => {
+    return () => {
+      if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+    };
   }, []);
 
   const handleDisconnect = () => {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
     clientRef.current.disconnect();
     setThreads([]);
     setSelectedThread(null);
@@ -2762,7 +3038,6 @@ export function App() {
                   <WindowControls />
                 </>
               }
-              sidebar={rightSidebarEl}
             />
           ) : displayedThread ? (
             <>
@@ -3046,7 +3321,6 @@ export function App() {
                 onInterrupt={isProcessing ? handleInterrupt : undefined}
               />
                 </div>
-                {rightSidebarEl}
               </div>
             </>
           ) : selectedThread ? (
@@ -3079,7 +3353,6 @@ export function App() {
                       ))}
                     </div>
                   </div>
-                  {rightSidebarEl}
                 </div>
               </div>
             ) : (
@@ -3117,7 +3390,6 @@ export function App() {
                       </div>
                     </div>
                   </div>
-                  {rightSidebarEl}
                 </div>
               </div>
             )
@@ -3249,11 +3521,11 @@ export function App() {
                 </div>
               )}
                 </div>
-                {rightSidebarEl}
               </div>
             </div>
           )}
         </main>
+        {rightSidebarEl}
       </div>
 
       {showModelPicker && (
@@ -3338,6 +3610,145 @@ export function App() {
                 <div className="shortcut-row"><kbd>N</kbd><span>Decline</span></div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showServerDialog && (
+        <div className="server-startup-overlay">
+          <WindowControls className="window-controls--floating" />
+          <div className="server-startup-card" onClick={e => e.stopPropagation()}>
+            <div className="server-startup-header">
+              <div className="server-startup-brand">
+                <svg width="22" height="22" viewBox="0 0 28 28" fill="none">
+                  <path d="M14 2L3 8v12l11 6 11-6V8L14 2z" fill="var(--accent-green)" opacity="0.12" stroke="var(--accent-green)" strokeWidth="1.2" />
+                  <path d="M14 8v12M8 11l6 3.5L20 11" stroke="var(--accent-green)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <span className="server-startup-brand-text">Codex Desktop</span>
+              </div>
+              {serverStarting ? (
+                <div className="server-startup-badge server-startup-badge--loading">
+                  <span className="server-startup-badge-dot" />
+                  Starting
+                </div>
+              ) : serverRunning ? (
+                <div className="server-startup-badge server-startup-badge--ok">
+                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                    <path d="M3.5 7l2.5 2.5 4.5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Connected
+                </div>
+              ) : (
+                <div className="server-startup-badge server-startup-badge--err">
+                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                    <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.2" />
+                    <path d="M7 4.5v3M7 9v.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                  </svg>
+                  Failed
+                </div>
+              )}
+            </div>
+
+            {serverStarting && (
+              <div className="server-startup-progress">
+                <div className="server-startup-progress-track">
+                  <div className="server-startup-progress-bar" />
+                </div>
+              </div>
+            )}
+
+            <h3 className="server-startup-title">
+              {serverStarting ? 'Starting App Server...' : serverRunning ? 'Establishing Connection...' : 'Unable to Start Server'}
+            </h3>
+            <p className="server-startup-desc">
+              {serverStarting
+                ? 'Launching the codex app-server process'
+                : serverRunning
+                ? 'Server is running, connecting to WebSocket'
+                : 'The codex binary was not found in PATH.'}
+            </p>
+
+            {serverLog && (
+              <code className="server-startup-log">{serverLog}</code>
+            )}
+
+            {!serverStarting && !serverRunning && (
+              <button className="server-startup-launch-btn" onClick={handleStartServer}>
+                <div className="server-startup-launch-btn-icon">
+                  <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                    <path d="M4 2.5l13 7.5-13 7.5z" fill="currentColor" />
+                  </svg>
+                </div>
+                <div className="server-startup-launch-btn-text">
+                  <span className="server-startup-launch-btn-title">Start Server</span>
+                  <span className="server-startup-launch-btn-sub">
+                    {codexBinPath
+                      ? codexBinPath.length > 45 ? '...' + codexBinPath.slice(-42) : codexBinPath
+                      : 'Launch codex app-server as child process'}
+                  </span>
+                </div>
+              </button>
+            )}
+
+            <div className="server-startup-config">
+              {!serverStarting && !serverRunning && (
+                <div className="server-startup-config-row">
+                  <span className="server-startup-config-label">Binary</span>
+                  <div className="server-startup-config-field">
+                    <input
+                      type="text"
+                      className="server-startup-pathpicker-input"
+                      placeholder="codex (from PATH)"
+                      value={codexBinPath}
+                      onChange={e => setCodexBinPath(e.target.value)}
+                      spellCheck={false}
+                    />
+                    <button className="server-startup-pathpicker-browse" onClick={handleBrowseCodexBinary} title="Browse for codex binary">
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                        <path d="M2 3.5h3.5l1.5 1.5H12v6.5H2z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="server-startup-config-row">
+                <span className="server-startup-config-label">Endpoint</span>
+                <code className="server-startup-config-value">{url}</code>
+              </div>
+              {!serverStarting && !serverRunning && codexCandidates.length > 0 && (
+                <div className="server-startup-config-row server-startup-config-row--top">
+                  <span className="server-startup-config-label">Detected</span>
+                  <div className="server-startup-candidates">
+                    {codexCandidates.map(p => (
+                      <button
+                        key={p}
+                        className="server-startup-candidate"
+                        onClick={() => setCodexBinPath(p)}
+                        title={p}
+                      >
+                        <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                          <path d="M2 6l3 3 5-5.5" stroke="var(--accent-green)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <span className="server-startup-candidate-path">{p}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {!serverStarting && (
+              <div className="server-startup-actions">
+                {serverRunning && connState !== 'connected' && (
+                  <button className="btn-primary server-startup-btn" onClick={() => void handleConnect(url)}>
+                    Reconnect
+                  </button>
+                )}
+                <button className="server-startup-btn-ghost" onClick={() => setShowServerDialog(false)}>
+                  Manual Setup
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
