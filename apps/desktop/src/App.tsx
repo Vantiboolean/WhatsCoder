@@ -21,9 +21,17 @@ import { RightSidebar, type RightSidebarTab } from './components/RightSidebar';
 import { CodeViewer, type OverlayView } from './components/CodeViewer';
 import { ThreadSidebar } from './components/ThreadSidebar';
 import { ThreadWorkspace } from './components/ThreadWorkspace';
+import { ChatComposer, type ChatComposerHandle } from './components/ChatComposer';
 
 type ReasoningLevel = 'low' | 'medium' | 'high' | 'xhigh';
 type ThemeMode = 'dark' | 'light' | 'system';
+
+const REASONING_OPTIONS: Array<{ value: ReasoningLevel; label: string }> = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'X-High' },
+];
 
 const appWindow = getCurrentWindow();
 
@@ -53,48 +61,6 @@ function WindowControls({ className }: { className?: string }) {
       <button className="window-ctrl window-ctrl--close" onClick={() => appWindow.close()} title="Close">
         <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" strokeWidth="1.2" /><line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" strokeWidth="1.2" /></svg>
       </button>
-    </div>
-  );
-}
-
-function CustomSelect({ value, options, onChange, title, compact }: {
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (v: string) => void;
-  title?: string;
-  compact?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const current = options.find(o => o.value === value);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-
-  return (
-    <div className={`csel${compact ? ' csel--compact' : ''}${open ? ' csel--open' : ''}`} ref={ref} title={title}>
-      <button className="csel-trigger" onClick={() => setOpen(!open)}>
-        <span className="csel-value">{current?.label ?? value}</span>
-        <svg className="csel-chevron" width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M2 3l2 2 2-2" />
-        </svg>
-      </button>
-      {open && (
-        <div className="csel-menu">
-          {options.map(o => (
-            <button key={o.value} className={`csel-option${o.value === value ? ' csel-option--active' : ''}`} onClick={() => { onChange(o.value); setOpen(false); }}>
-              {o.label}
-              {o.value === value && (
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 6l2.5 2.5 4.5-5" /></svg>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -868,7 +834,6 @@ export function App() {
   const [codexConfig, setCodexConfig] = useState<Record<string, unknown> | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [showRawJson, setShowRawJson] = useState(false);
-  const [inputText, setInputText] = useState('');
   const [threadSearch, setThreadSearch] = useState('');
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -906,11 +871,8 @@ export function App() {
   const [folderAlias, setFolderAlias] = usePersistedState<Record<string, string>>('codex-folder-aliases', {});
   const [skills, setSkills] = useState<Array<{ name: string; path: string }>>([]);
   const [mcpServers, setMcpServers] = useState<Array<{ name: string; status: string }>>([]);
-  const [slashOpen, setSlashOpen] = useState(false);
-  const [slashIdx, setSlashIdx] = useState(0);
   const [turnStartTime, setTurnStartTime] = useState<number | null>(null);
-  const [messageHistory, setMessageHistory] = useState<string[]>([]);
-  const [historyIdx, setHistoryIdx] = useState(-1);
+  const [composerHistorySeed, setComposerHistorySeed] = useState<string[]>([]);
   const [userInputRequests, setUserInputRequests] = useState<UserInputRequest[]>([]);
   const [mcpElicitationRequests, setMcpElicitationRequests] = useState<McpElicitationRequest[]>([]);
   const [dynamicToolCallRequests, setDynamicToolCallRequests] = useState<DynamicToolCallRequest[]>([]);
@@ -930,7 +892,6 @@ export function App() {
   const [isUpdatingAutonomy, setIsUpdatingAutonomy] = useState(false);
   const [gitInfo, setGitInfo] = useState<{ branch: string; isDirty: boolean; addedLines: number; removedLines: number; ahead: number; behind: number; lastCommitSha?: string; lastCommitMsg?: string } | null>(null);
 
-  const [attachedImages, setAttachedImages] = useState<Array<{ dataUrl: string; name: string }>>([]);
   const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [historyEntries, setHistoryEntries] = useState<import('./lib/db').ChatHistoryEntry[]>([]);
   const [pinnedThreads, setPinnedThreads] = usePersistedState<string[]>('codex-pinned-threads', []);
@@ -945,8 +906,7 @@ export function App() {
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedThreadRef = useRef<string | null>(null);
   const threadDetailRef = useRef<ThreadDetail | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<ChatComposerHandle>(null);
   const activeTurnIdRef = useRef<string | null>(null);
   const pendingDeltaEventsRef = useRef<Array<{ method: string; params: Record<string, unknown> }>>([]);
   const deltaFlushScheduledRef = useRef(false);
@@ -955,7 +915,6 @@ export function App() {
   const threadsRef = useRef<ThreadSummary[]>([]);
   const sidebarViewRef = useRef(sidebarView);
   const skillsRef = useRef<Array<{ name: string; path: string }>>([]);
-  const isComposingRef = useRef(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deferredThreadSearch = useDeferredValue(threadSearch);
   const deferredHistorySearchQuery = useDeferredValue(historySearchQuery);
@@ -1001,13 +960,11 @@ export function App() {
 
   useEffect(() => {
     if (!selectedThread) {
-      setMessageHistory([]);
-      setHistoryIdx(-1);
+      setComposerHistorySeed([]);
       return;
     }
     getChatMessages(selectedThread, 50).then(msgs => {
-      setMessageHistory([...msgs].reverse());
-      setHistoryIdx(-1);
+      setComposerHistorySeed([...msgs].reverse());
     }).catch(() => {});
   }, [selectedThread]);
 
@@ -1886,7 +1843,7 @@ export function App() {
       setActiveProjectCwd(thread.cwd ?? fallbackCwd ?? null);
     }
     void handleListThreads();
-    setTimeout(() => textareaRef.current?.focus(), 100);
+    setTimeout(() => composerRef.current?.focus(), 100);
   }, [handleListThreads]);
 
   useEffect(() => {
@@ -2225,17 +2182,8 @@ export function App() {
   const handleCommitChanges = useCallback(async () => {
     if (!selectedThread || !threadDetail) return;
     const text = 'Please review the current changes, propose a commit message, and ask for confirmation before running git commit.';
-    setInputText(text);
+    composerRef.current?.setDraftText(text);
     setToast({ msg: 'Commit helper now prepares a safe prompt instead of committing immediately.', type: 'info' });
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (!el) return;
-      el.focus();
-      el.selectionStart = text.length;
-      el.selectionEnd = text.length;
-      el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, 160) + 'px';
-    });
   }, [selectedThread, threadDetail]);
 
   const handleStartNewThreadWithMessage = useCallback(async (text: string) => {
@@ -2404,32 +2352,37 @@ export function App() {
     }
   }, []);
 
-  const handleSendFromBar = async () => {
-    const text = inputText.trim();
-    if (!text && attachedImages.length === 0) return;
-    const finalText = attachedImages.length > 0
-      ? `${text}\n\n${attachedImages.map(img => `![${img.name}](${img.dataUrl})`).join('\n')}`.trim()
-      : text;
-    setMessageHistory(prev => [text, ...prev].slice(0, 50));
-    setHistoryIdx(-1);
-    setInputText('');
-    setAttachedImages([]);
-    if (selectedThread && text) { addChatMessage(selectedThread, text).catch(() => {}); }
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    const textForSend = finalText;
+  const handleComposerSubmit = useCallback(async ({
+    text,
+    attachedImages,
+  }: {
+    text: string;
+    attachedImages: Array<{ dataUrl: string; name: string }>;
+  }) => {
+    if (!text && attachedImages.length === 0) {
+      return;
+    }
 
-    if (textForSend.startsWith('!') && selectedThread) {
-      await handleShellCommand(textForSend.slice(1).trim());
+    const finalText = attachedImages.length > 0
+      ? `${text}\n\n${attachedImages.map((image) => `![${image.name}](${image.dataUrl})`).join('\n')}`.trim()
+      : text;
+
+    if (selectedThread && text) {
+      addChatMessage(selectedThread, text).catch(() => {});
+    }
+
+    if (finalText.startsWith('!') && selectedThread) {
+      await handleShellCommand(finalText.slice(1).trim());
       return;
     }
 
     if (isAgentActive && selectedThread && threadDetail) {
-      const activeTurn = threadDetail.turns?.find(t => t.status === 'inProgress');
+      const activeTurn = threadDetail.turns?.find((turn) => turn.status === 'inProgress');
       if (activeTurn) {
         const optimisticSteerItem: ThreadItem = {
           type: 'userMessage',
           id: `optimistic-steer-${Date.now()}`,
-          content: [{ type: 'text', text: textForSend }],
+          content: [{ type: 'text', text: finalText }],
         };
         setThreadDetail((prev) =>
           applyServerEventToThreadDetail(prev, 'item/completed', {
@@ -2439,270 +2392,148 @@ export function App() {
           } as Record<string, unknown>),
         );
         try {
-          await clientRef.current.steerTurn(selectedThread, textForSend, activeTurn.id);
+          await clientRef.current.steerTurn(selectedThread, finalText, activeTurn.id);
         } catch {
           await refreshThreadDetail(selectedThread);
-          enqueuePendingMessage(selectedThread, textForSend);
+          enqueuePendingMessage(selectedThread, finalText);
         }
         return;
       }
     }
 
     if (isSending && selectedThread) {
-      enqueuePendingMessage(selectedThread, textForSend);
+      enqueuePendingMessage(selectedThread, finalText);
       return;
     }
+
     if (!selectedThread) {
-      await handleStartNewThreadWithMessage(textForSend);
+      await handleStartNewThreadWithMessage(finalText);
       return;
     }
-    await handleSendMessage(textForSend);
-  };
 
-  const handleInputKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendFromBar();
-    }
-    if (isComposingRef.current) return;
-    if (e.key === 'ArrowUp' && !inputText && messageHistory.length > 0) {
-      e.preventDefault();
-      const next = Math.min(historyIdx + 1, messageHistory.length - 1);
-      setHistoryIdx(next);
-      setInputText(messageHistory[next]);
-    }
-    if (e.key === 'ArrowDown' && historyIdx >= 0) {
-      e.preventDefault();
-      const next = historyIdx - 1;
-      if (next < 0) {
-        setHistoryIdx(-1);
-        setInputText('');
-      } else {
-        setHistoryIdx(next);
-        setInputText(messageHistory[next]);
-      }
-    }
-  };
+    await handleSendMessage(finalText);
+  }, [
+    enqueuePendingMessage,
+    handleSendMessage,
+    handleShellCommand,
+    handleStartNewThreadWithMessage,
+    isAgentActive,
+    isSending,
+    refreshThreadDetail,
+    selectedThread,
+    threadDetail,
+  ]);
 
-  const handleTextareaInput = () => {
-    const el = textareaRef.current;
-    if (el) {
-      el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, 240) + 'px';
-    }
-  };
-
-  const handleImageFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const dataUrl = ev.target?.result as string;
-      setAttachedImages((prev) => [...prev, { dataUrl, name: file.name }]);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = Array.from(e.clipboardData.items);
-    const imageItem = items.find((item) => item.type.startsWith('image/'));
-    if (imageItem) {
-      e.preventDefault();
-      const file = imageItem.getAsFile();
-      if (file) handleImageFile(file);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLTextAreaElement>) => {
-    e.preventDefault();
-    const files = Array.from(e.dataTransfer.files);
-    for (const file of files) {
-      if (file.type.startsWith('image/')) {
-        handleImageFile(file);
-      } else if (file.type.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md')) {
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          const content = ev.target?.result as string;
-          setInputText((prev) => prev + (prev ? '\n' : '') + content);
-        };
-        reader.readAsText(file);
-      }
-    }
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    for (const file of files) {
-      if (file.type.startsWith('image/')) {
-        handleImageFile(file);
-      } else if (file.type.startsWith('text/') || /\.(txt|md|json|csv|xml|yaml|yml|js|ts|jsx|tsx|py|go|rs|java|c|cpp|h|css|html)$/.test(file.name)) {
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          const content = ev.target?.result as string;
-          setInputText((prev) => prev + (prev ? '\n' : '') + `\`\`\`\n${content}\n\`\`\``);
-        };
-        reader.readAsText(file);
-      }
-    }
-    e.target.value = '';
-  };
-
-  const handleSlashButtonClick = () => {
-    setInputText('/');
-    setSlashOpen(true);
-    setSlashIdx(0);
-    setTimeout(() => textareaRef.current?.focus(), 0);
-  };
-
-  type PopupItem = { id: string; icon: 'command' | 'skill' | 'file'; name: string; desc: string; badge?: string; action?: () => void; insert?: string };
-  type PopupMode = 'slash' | 'mention' | null;
-
-  const builtInCommands: PopupItem[] = useMemo(() => [
-    { id: 'cmd-model', icon: 'command', name: 'model', desc: 'Choose model and reasoning effort' },
-    { id: 'cmd-skills', icon: 'command', name: 'skills', desc: 'Browse and manage skills' },
-    { id: 'cmd-review', icon: 'command', name: 'review', desc: 'Review current changes and find issues' },
-    { id: 'cmd-compact', icon: 'command', name: 'compact', desc: 'Summarize conversation to save context' },
-    { id: 'cmd-clear', icon: 'command', name: 'clear', desc: 'Clear terminal and start a new chat' },
-    { id: 'cmd-rename', icon: 'command', name: 'rename', desc: 'Rename the current thread' },
-    { id: 'cmd-diff', icon: 'command', name: 'diff', desc: 'Show git diff including untracked files' },
-    { id: 'cmd-status', icon: 'command', name: 'status', desc: 'Show session configuration and token usage' },
-    { id: 'cmd-plan', icon: 'command', name: 'plan', desc: 'Switch to Plan mode' },
-    { id: 'cmd-fork', icon: 'command', name: 'fork', desc: 'Fork/branch this conversation' },
-    { id: 'cmd-new', icon: 'command', name: 'new', desc: 'Start a new chat' },
-    { id: 'cmd-help', icon: 'command', name: 'help', desc: 'Show available commands and skills' },
-  ], []);
-
-  const mentionItems: PopupItem[] = useMemo(() =>
-    skills.map(s => ({
-      id: `skill-${s.name}`,
-      icon: 'skill' as const,
-      name: s.name,
-      desc: s.path.split('/').pop() || s.path,
-      badge: 'Skill',
-      insert: `$${s.name}`,
-    })),
-  [skills]);
-
-  const popupMode: PopupMode = slashOpen
-    ? inputText.startsWith('/') ? 'slash'
-    : inputText.includes('$') ? 'mention'
-    : null
-    : null;
-
-  const popupFilter = popupMode === 'slash'
-    ? inputText.slice(1).toLowerCase()
-    : popupMode === 'mention'
-    ? (inputText.match(/\$([^\s]*)$/)?.[1] || '').toLowerCase()
-    : '';
-
-  const popupItems: PopupItem[] = useMemo(() => {
-    const source = popupMode === 'slash' ? builtInCommands : mentionItems;
-    if (!popupFilter) return source;
-    return source.filter(item => item.name.toLowerCase().includes(popupFilter) || item.desc.toLowerCase().includes(popupFilter));
-  }, [popupMode, builtInCommands, mentionItems, popupFilter]);
-
-  const handleInputChange = (val: string) => {
-    setInputText(val);
-    const atEnd = val.length > 0;
-    if (atEnd && val.startsWith('/') && !val.includes('\n') && val.indexOf(' ') === -1) {
-      setSlashOpen(true);
-      setSlashIdx(0);
-    } else if (atEnd && /\$[^\s]*$/.test(val)) {
-      setSlashOpen(true);
-      setSlashIdx(0);
-    } else {
-      setSlashOpen(false);
-    }
-    handleTextareaInput();
-  };
-
-  const handlePopupSelect = (item: PopupItem) => {
-    setSlashOpen(false);
-    if (item.action) {
-      item.action();
-      return;
-    }
-    if (item.insert) {
-      const mentionMatch = inputText.match(/\$[^\s]*$/);
-      if (mentionMatch) {
-        const before = inputText.slice(0, mentionMatch.index!);
-        setInputText(`${before}${item.insert} `);
-      } else {
-        setInputText(`${item.insert} `);
-      }
-      textareaRef.current?.focus();
-      return;
-    }
-    setInputText('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    const cmd = item.name;
-    if (cmd === 'model') {
+  const handleComposerCommand = useCallback(async (command: string) => {
+    if (command === 'model') {
       setShowModelPicker(true);
-    } else if (cmd === 'clear' && selectedThread) {
-      handleRollback(threadDetail?.turns?.length ?? 0);
-    } else if (cmd === 'compact' && selectedThread) {
-      handleCompactThread();
-    } else if (cmd === 'fork' && selectedThread) {
-      handleForkThread();
-    } else if (cmd === 'review' && selectedThread) {
-      handleSendMessage('/review');
-    } else if (cmd === 'diff' && selectedThread) {
-      handleSendMessage('/diff');
-    } else if (cmd === 'status' && selectedThread) {
-      handleSendMessage('/status');
-    } else if (cmd === 'rename') {
+      return;
+    }
+
+    if (command === 'clear' && selectedThread) {
+      await handleRollback(threadDetail?.turns?.length ?? 0);
+      return;
+    }
+
+    if (command === 'compact' && selectedThread) {
+      await handleCompactThread();
+      return;
+    }
+
+    if (command === 'fork' && selectedThread) {
+      await handleForkThread();
+      return;
+    }
+
+    if (command === 'review' && selectedThread) {
+      await handleSendMessage('/review');
+      return;
+    }
+
+    if (command === 'diff' && selectedThread) {
+      await handleSendMessage('/diff');
+      return;
+    }
+
+    if (command === 'status' && selectedThread) {
+      await handleSendMessage('/status');
+      return;
+    }
+
+    if (command === 'rename') {
       setEditingName(true);
       setEditNameValue(threadDetail?.name || threadDetail?.preview || '');
-    } else if (cmd === 'skills') {
+      return;
+    }
+
+    if (command === 'skills') {
       setSidebarView('skills');
-      void refreshSkills();
-    } else if (cmd === 'plan' && selectedThread) {
-      handleSendMessage('Switch to planning mode. Analyze the situation and create a detailed plan before making any changes.');
-    } else if (cmd === 'new') {
-      handleNewThread();
-    } else if (cmd === 'help') {
+      await refreshSkills();
+      return;
+    }
+
+    if (command === 'plan' && selectedThread) {
+      await handleSendMessage('Switch to planning mode. Analyze the situation and create a detailed plan before making any changes.');
+      return;
+    }
+
+    if (command === 'new') {
+      await handleNewThread();
+      return;
+    }
+
+    if (command === 'help') {
       const helpLines = [
-        '**Slash commands** (type /):', '',
-        ...builtInCommands.map(c => `  \`/${c.name}\` — ${c.desc}`), '',
-        '**Skill mentions** (type $):', '',
+        '**Slash commands** (type /):',
+        '',
+        '  `/model` — Choose model and reasoning effort',
+        '  `/skills` — Browse and manage skills',
+        '  `/review` — Review current changes and find issues',
+        '  `/compact` — Summarize conversation to save context',
+        '  `/clear` — Clear terminal and start a new chat',
+        '  `/rename` — Rename the current thread',
+        '  `/diff` — Show git diff including untracked files',
+        '  `/status` — Show session configuration and token usage',
+        '  `/plan` — Switch to Plan mode',
+        '  `/fork` — Fork or branch this conversation',
+        '  `/new` — Start a new chat',
+        '  `/help` — Show available commands and skills',
+        '',
+        '**Skill mentions** (type $):',
+        '',
         skills.length > 0
-          ? skills.map(s => `  \`$${s.name}\``).join(', ')
-          : '  No skills loaded. Connect to Codex and navigate to a project.', '',
-        '**Shell commands** (type !):', '',
+          ? skills.map((skill) => `  \`$${skill.name}\``).join(', ')
+          : '  No skills loaded. Connect to Codex and navigate to a project.',
+        '',
+        '**Shell commands** (type !):',
+        '',
         '  `!command` — Execute a shell command in the thread context (e.g. `!ls -la`)',
       ];
-      setThreadDetail(prev => {
-        if (!prev) return prev;
-        const helpItem = { type: 'agentMessage' as const, id: `help-${Date.now()}`, content: [{ type: 'text', text: helpLines.join('\n') }] };
+      setThreadDetail((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        const helpItem = {
+          type: 'agentMessage' as const,
+          id: `help-${Date.now()}`,
+          content: [{ type: 'text', text: helpLines.join('\n') }],
+        };
         const turns = prev.turns ? [...prev.turns] : [];
         turns.push({ id: `help-turn-${Date.now()}`, status: 'completed' as const, items: [helpItem] });
         return { ...prev, turns };
       });
     }
-  };
-
-  const handleSlashKeyDown = (e: React.KeyboardEvent): boolean => {
-    if (!slashOpen || popupItems.length === 0) return false;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setSlashIdx(i => (i + 1) % popupItems.length);
-      return true;
-    }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setSlashIdx(i => (i - 1 + popupItems.length) % popupItems.length);
-      return true;
-    }
-    if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault();
-      handlePopupSelect(popupItems[slashIdx]);
-      return true;
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      setSlashOpen(false);
-      return true;
-    }
-    return false;
-  };
+  }, [
+    handleCompactThread,
+    handleForkThread,
+    handleNewThread,
+    handleRollback,
+    handleSendMessage,
+    refreshSkills,
+    selectedThread,
+    skills,
+    threadDetail,
+  ]);
 
   const toggleGroup = useCallback((cwd: string) => {
     setCollapsedGroups(prev => {
@@ -2730,11 +2561,14 @@ export function App() {
     [pendingMessages, selectedThread],
   );
   const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreads), [pinnedThreads]);
+  const modelSelectOptions = useMemo(
+    () => models.map((model) => ({ value: model.id, label: model.displayName })),
+    [models],
+  );
   const pinnedSidebarThreads = useMemo(
     () => threads.filter((thread) => pinnedThreadIdSet.has(thread.id)),
     [threads, pinnedThreadIdSet],
   );
-  const canSubmitInput = inputText.trim().length > 0;
   const composerDisabled = isShowingPreviousThreadWhileLoading;
   const composerPlaceholder = composerDisabled
     ? 'Loading selected thread...'
@@ -2747,6 +2581,8 @@ export function App() {
       ? 'Enter to follow up, Esc to interrupt'
       : null;
   const autonomyDetail = autonomyMode === 'custom' ? getAutonomyModeSummary(codexConfig) : null;
+  const activeBranchLabel = gitInfo?.branch || displayedThread?.gitInfo?.branch || 'master';
+  const emptyBranchLabel = gitInfo?.branch || 'main';
   const handleShowThreadHome = useCallback(() => {
     setSelectedThread(null);
     setThreadDetail(null);
@@ -2764,6 +2600,12 @@ export function App() {
   }, []);
   const handleOpenSettingsView = useCallback(() => {
     setSidebarView('settings');
+  }, []);
+  const focusComposer = useCallback(() => {
+    composerRef.current?.focus();
+  }, []);
+  const setComposerDraft = useCallback((text: string) => {
+    composerRef.current?.setDraftText(text);
   }, []);
   const handleToggleArchived = useCallback(() => {
     setShowArchived((prev) => !prev);
@@ -2790,9 +2632,8 @@ export function App() {
     setShowRawJson(!showRawJson);
   }, [showRawJson]);
   const handleInsertPrompt = useCallback((text: string) => {
-    setInputText(text);
-    textareaRef.current?.focus();
-  }, []);
+    setComposerDraft(text);
+  }, [setComposerDraft]);
   const toggleRightSidebar = useCallback(() => {
     setRightSidebarOpen(!rightSidebarOpen);
   }, [rightSidebarOpen, setRightSidebarOpen]);
@@ -2904,9 +2745,8 @@ export function App() {
               onSearchChange={setHistorySearchQuery}
               threads={threads}
               onSelectMessage={(msg) => {
-                setInputText(msg);
                 setSidebarView('threads');
-                setTimeout(() => textareaRef.current?.focus(), 100);
+                setTimeout(() => composerRef.current?.setDraftText(msg), 100);
               }}
             />
           ) : overlayView ? (
@@ -3179,182 +3019,32 @@ export function App() {
                 contextUsage={contextUsage}
                 turnStartTime={turnStartTime}
               />
-              <div className="bottom-bar">
-                <div className="bottom-bar-input">
-                  {slashOpen && popupItems.length > 0 && (
-                    <div className="slash-popup">
-                      <div className="slash-popup-header">{popupMode === 'slash' ? 'Commands' : 'Skills & Mentions'}</div>
-                      <div className="slash-popup-list">
-                        {popupItems.map((item, i) => (
-                          <button
-                            key={item.id}
-                            className={`slash-popup-item${i === slashIdx ? ' slash-popup-item--active' : ''}`}
-                            onMouseEnter={() => setSlashIdx(i)}
-                            onClick={() => handlePopupSelect(item)}
-                          >
-                            <span className={`slash-popup-icon${item.icon === 'skill' ? ' slash-popup-icon--skill' : ''}`}>
-                              {item.icon === 'command' ? (
-                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <polyline points="4,6 8,10 12,6" />
-                                </svg>
-                              ) : (
-                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--accent-green)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="2" y="2" width="5" height="5" rx="1" />
-                                  <rect x="9" y="2" width="5" height="5" rx="1" />
-                                  <rect x="2" y="9" width="5" height="5" rx="1" />
-                                  <rect x="9" y="9" width="5" height="5" rx="1" />
-                                </svg>
-                              )}
-                            </span>
-                            <span className="slash-popup-info">
-                              <span className="slash-popup-name">{popupMode === 'slash' ? '/' : '$'}{item.name}</span>
-                              <span className="slash-popup-desc">{item.desc}</span>
-                            </span>
-                            {item.badge && <span className="slash-popup-badge">{item.badge}</span>}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {attachedImages.length > 0 && (
-                    <div className="attached-images-preview">
-                      {attachedImages.map((img, idx) => (
-                        <div key={idx} className="attached-image-thumb">
-                          <img src={img.dataUrl} alt={img.name} />
-                          <button className="attached-image-remove" onClick={() => setAttachedImages(prev => prev.filter((_, i) => i !== idx))}>
-                            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg>
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <textarea
-                    ref={textareaRef}
-                    className="bottom-bar-textarea"
-                    value={inputText}
-                    onChange={(e) => handleInputChange(e.target.value)}
-                    onKeyDown={(e) => { if (!handleSlashKeyDown(e)) handleInputKeyDown(e); }}
-                    onCompositionStart={() => { isComposingRef.current = true; }}
-                    onCompositionEnd={() => { isComposingRef.current = false; }}
-                    onPaste={handlePaste}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={handleDrop}
-                    placeholder={composerPlaceholder}
-                    disabled={composerDisabled}
-                    rows={1}
-                    title="Enter 发送 · Shift+Enter 换行"
-                  />
-                  {inputText.length > 500 && (
-                    <span className="char-count">{inputText.length}</span>
-                  )}
-                  <div className="bottom-bar-actions">
-                    <button
-                      className={`bottom-bar-send${canSubmitInput ? ' bottom-bar-send--active' : ''}`}
-                      onClick={handleSendFromBar}
-                      disabled={!canSubmitInput || composerDisabled}
-                      title={isProcessing ? 'Send follow-up' : 'Send'}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                        <path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
-                    {isProcessing && (
-                      <button
-                        className="bottom-bar-send bottom-bar-send--stop"
-                        onClick={handleInterrupt}
-                        title="Stop"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-                          <rect x="2" y="2" width="10" height="10" rx="2" />
-                        </svg>
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="bottom-bar-controls">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*,text/*,.txt,.md,.json,.csv,.xml,.yaml,.yml,.js,.ts,.jsx,.tsx,.py,.go,.rs,.java,.c,.cpp,.h,.css,.html,.pdf"
-                    multiple
-                    style={{ display: 'none' }}
-                    onChange={handleFileSelect}
-                  />
-                  <button
-                    className="bb-icon-btn"
-                    onClick={() => fileInputRef.current?.click()}
-                    title="添加文件或图片"
-                    disabled={composerDisabled}
-                  >
-                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M13.5 9.5v3a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-3" />
-                      <polyline points="10.5,5 8,2.5 5.5,5" />
-                      <line x1="8" y1="2.5" x2="8" y2="10.5" />
-                    </svg>
-                  </button>
-                  <button
-                    className="bb-icon-btn"
-                    onClick={handleSlashButtonClick}
-                    title="插入斜杠命令"
-                    disabled={composerDisabled}
-                  >
-                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="10" y1="3" x2="6" y2="13" />
-                    </svg>
-                  </button>
-                  {models.length > 0 && (
-                    <CustomSelect
-                      value={selectedModel}
-                      options={models.map(m => ({ value: m.id, label: m.displayName }))}
-                      onChange={setSelectedModel}
-                      title="Model"
-                    />
-                  )}
-                  <CustomSelect
-                    value={reasoning}
-                    options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'xhigh', label: 'X-High' }]}
-                    onChange={v => setReasoning(v as ReasoningLevel)}
-                    title="Reasoning"
-                  />
-                  <div className="bottom-bar-spacer" />
-                  <span className="bottom-bar-label">
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
-                      <rect x="1" y="1" width="8" height="8" rx="1.5" />
-                    </svg>
-                    Codex
-                  </span>
-                  <CustomSelect
-                    value={autonomyMode}
-                    options={autonomyOptions}
-                    onChange={handleAutonomyModeChange}
-                    title="Permission mode"
-                    compact
-                  />
-                  {isUpdatingAutonomy && (
-                    <span className="bottom-bar-label">Saving mode...</span>
-                  )}
-                  {!isUpdatingAutonomy && autonomyDetail && (
-                    <span className="bottom-bar-label">{autonomyDetail}</span>
-                  )}
-                  <span className="bottom-bar-label">
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M5 1v3" />
-                      <path d="M5 6v3" />
-                      <path d="M2 7l3-3 3 3" />
-                    </svg>
-                    {gitInfo?.branch || displayedThread.gitInfo?.branch || 'master'}
-                  </span>
-                  {contextUsage && (
-                    <span className={`bottom-bar-label bottom-bar-context${contextUsage.percent < 20 ? ' bottom-bar-context--low' : ''}`}>
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                        <circle cx="5" cy="5" r="4" stroke="currentColor" strokeWidth="1.2" />
-                        <path d={`M5 5 L5 1 A4 4 0 ${contextUsage.percent > 50 ? 1 : 0} 1 ${5 + 4 * Math.sin(2 * Math.PI * (100 - contextUsage.percent) / 100)} ${5 - 4 * Math.cos(2 * Math.PI * (100 - contextUsage.percent) / 100)} Z`} fill="currentColor" opacity="0.4" />
-                      </svg>
-                      {contextUsage.percent}% ctx
-                    </span>
-                  )}
-                </div>
-              </div>
+              <ChatComposer
+                ref={composerRef}
+                className="bottom-bar"
+                disabled={composerDisabled}
+                isProcessing={isProcessing}
+                placeholder={composerPlaceholder}
+                historyKey={selectedThread ?? 'new-thread'}
+                historySeed={composerHistorySeed}
+                skills={skills}
+                modelOptions={modelSelectOptions}
+                selectedModel={selectedModel}
+                onSelectModel={setSelectedModel}
+                reasoning={reasoning}
+                reasoningOptions={REASONING_OPTIONS}
+                onSelectReasoning={(value) => setReasoning(value as ReasoningLevel)}
+                autonomyMode={autonomyMode}
+                autonomyOptions={autonomyOptions}
+                onSelectAutonomyMode={handleAutonomyModeChange}
+                isUpdatingAutonomy={isUpdatingAutonomy}
+                autonomyDetail={autonomyDetail}
+                branchLabel={activeBranchLabel}
+                contextUsage={contextUsage}
+                onSubmit={handleComposerSubmit}
+                onExecuteCommand={handleComposerCommand}
+                onInterrupt={isProcessing ? handleInterrupt : undefined}
+              />
                 </div>
                 {rightSidebarEl}
               </div>
@@ -3396,7 +3086,7 @@ export function App() {
               <div className="main-empty">
                 <div className="empty-toolbar" data-tauri-drag-region>
                   <div className="empty-toolbar-left">
-                    <button className="empty-toolbar-title" onClick={() => { textareaRef.current?.focus(); }}>
+                    <button className="empty-toolbar-title" onClick={focusComposer}>
                       Thread Unavailable
                     </button>
                   </div>
@@ -3435,7 +3125,7 @@ export function App() {
             <div className="main-empty">
               <div className="empty-toolbar" data-tauri-drag-region>
                 <div className="empty-toolbar-left">
-                  <button className="empty-toolbar-title" onClick={() => { textareaRef.current?.focus(); }}>New Thread</button>
+                  <button className="empty-toolbar-title" onClick={focusComposer}>New Thread</button>
                 </div>
                 <div className="empty-toolbar-right">
                   <button className={`toolbar-icon-btn${rightSidebarOpen ? ' toolbar-icon-btn--active' : ''}`} onClick={toggleRightSidebar} title={rightSidebarOpen ? 'Close sidebar' : 'Open sidebar'}>
@@ -3520,7 +3210,7 @@ export function App() {
                           { icon: '📄', text: 'Create a one-page $pdf that summarizes this app.' },
                           { icon: '✏️', text: 'Create a plan to refactor the codebase.' },
                         ].map((s, i) => (
-                          <button key={i} className="suggestion-card" onClick={() => { setInputText(s.text); textareaRef.current?.focus(); }}>
+                          <button key={i} className="suggestion-card" onClick={() => setComposerDraft(s.text)}>
                             <span className="suggestion-card-icon">{s.icon}</span>
                             <span className="suggestion-card-text">{s.text}</span>
                           </button>
@@ -3529,136 +3219,33 @@ export function App() {
                     </div>
                   )}
 
-                  <div className="bottom-bar empty-bottom-bar">
-                    <div className="bottom-bar-input">
-                      {slashOpen && popupItems.length > 0 && (
-                        <div className="slash-popup">
-                          <div className="slash-popup-header">{popupMode === 'slash' ? 'Commands' : 'Skills & Mentions'}</div>
-                          <div className="slash-popup-list">
-                            {popupItems.map((item, i) => (
-                              <button
-                                key={item.id}
-                                className={`slash-popup-item${i === slashIdx ? ' slash-popup-item--active' : ''}`}
-                                onMouseEnter={() => setSlashIdx(i)}
-                                onClick={() => handlePopupSelect(item)}
-                              >
-                                <span className={`slash-popup-icon${item.icon === 'skill' ? ' slash-popup-icon--skill' : ''}`}>
-                                  {item.icon === 'command' ? (
-                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                      <polyline points="4,6 8,10 12,6" />
-                                    </svg>
-                                  ) : (
-                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--accent-green)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                      <rect x="2" y="2" width="5" height="5" rx="1" />
-                                      <rect x="9" y="2" width="5" height="5" rx="1" />
-                                      <rect x="2" y="9" width="5" height="5" rx="1" />
-                                      <rect x="9" y="9" width="5" height="5" rx="1" />
-                                    </svg>
-                                  )}
-                                </span>
-                                <span className="slash-popup-info">
-                                  <span className="slash-popup-name">{popupMode === 'slash' ? '/' : '$'}{item.name}</span>
-                                  <span className="slash-popup-desc">{item.desc}</span>
-                                </span>
-                                {item.badge && <span className="slash-popup-badge">{item.badge}</span>}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      <textarea
-                        ref={textareaRef}
-                        className="bottom-bar-textarea"
-                        value={inputText}
-                        onChange={(e) => handleInputChange(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (handleSlashKeyDown(e)) return;
-                          handleInputKeyDown(e);
-                        }}
-                        onInput={(e) => {
-                          const el = e.currentTarget;
-                          el.style.height = 'auto';
-                          el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-                        }}
-                        placeholder="Ask Codex anything, @ to add files, / for commands"
-                        rows={1}
-                      />
-                      <button
-                        className={`bottom-bar-send${inputText.trim() ? ' bottom-bar-send--active' : ''}`}
-                        onClick={handleSendFromBar}
-                        disabled={!inputText.trim()}
-                        title="Send"
-                      >
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                          <path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </button>
-                    </div>
-                    <div className="bottom-bar-controls">
-                      <button
-                        className="bb-icon-btn"
-                        onClick={() => fileInputRef.current?.click()}
+                  <ChatComposer
+                    ref={composerRef}
+                    className="bottom-bar empty-bottom-bar"
+                    placeholder={composerPlaceholder}
+                    historyKey="new-thread"
+                    historySeed={composerHistorySeed}
+                    skills={skills}
+                    modelOptions={modelSelectOptions}
+                    selectedModel={selectedModel}
+                    onSelectModel={setSelectedModel}
+                    reasoning={reasoning}
+                    reasoningOptions={REASONING_OPTIONS}
+                    onSelectReasoning={(value) => setReasoning(value as ReasoningLevel)}
+                    autonomyMode={autonomyMode}
+                    autonomyOptions={autonomyOptions}
+                    onSelectAutonomyMode={handleAutonomyModeChange}
+                    isUpdatingAutonomy={isUpdatingAutonomy}
+                    autonomyDetail={autonomyDetail}
+                    branchLabel={emptyBranchLabel}
+                    contextUsage={null}
+                    onSubmit={handleComposerSubmit}
+                    onExecuteCommand={handleComposerCommand}
+                  />
+                  {/*
                         title="添加文件或图片"
-                      >
-                        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M13.5 9.5v3a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-3" />
-                          <polyline points="10.5,5 8,2.5 5.5,5" />
-                          <line x1="8" y1="2.5" x2="8" y2="10.5" />
-                        </svg>
-                      </button>
-                      <button
-                        className="bb-icon-btn"
-                        onClick={handleSlashButtonClick}
                         title="插入斜杠命令"
-                      >
-                        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="10" y1="3" x2="6" y2="13" />
-                        </svg>
-                      </button>
-                      {models.length > 0 && (
-                        <CustomSelect
-                          value={selectedModel}
-                          options={models.map(m => ({ value: m.id, label: m.displayName }))}
-                          onChange={setSelectedModel}
-                          title="Model"
-                        />
-                      )}
-                      <CustomSelect
-                        value={reasoning}
-                        options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'xhigh', label: 'X-High' }]}
-                        onChange={v => setReasoning(v as ReasoningLevel)}
-                        title="Reasoning"
-                      />
-                      <div className="bottom-bar-spacer" />
-                      <span className="bottom-bar-label">
-                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
-                          <rect x="1" y="1" width="8" height="8" rx="1.5" />
-                        </svg>
-                        Codex
-                      </span>
-                      <CustomSelect
-                        value={autonomyMode}
-                        options={autonomyOptions}
-                        onChange={handleAutonomyModeChange}
-                        title="Permission mode"
-                        compact
-                      />
-                      {isUpdatingAutonomy && (
-                        <span className="bottom-bar-label">Saving mode...</span>
-                      )}
-                      {!isUpdatingAutonomy && autonomyDetail && (
-                        <span className="bottom-bar-label">{autonomyDetail}</span>
-                      )}
-                      <span className="bottom-bar-label">
-                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M5 1v3" />
-                          <path d="M5 6v3" />
-                          <path d="M2 7l3-3 3 3" />
-                        </svg>
-                        {gitInfo?.branch || 'main'}
-                      </span>
-                    </div>
-                  </div>
+                  */}
                 </div>
               )}
                 </div>
