@@ -1139,15 +1139,20 @@ export function App() {
   useEffect(() => {
     const cwd = threadDetail?.cwd || (threadGroups.length > 0 ? threadGroups[0]?.cwd : null);
     if (!cwd) return;
+    let fetching = false;
+    let cancelled = false;
     const fetchGitInfo = async () => {
+      if (fetching || cancelled) return;
+      fetching = true;
       try {
         const info = await invoke<{ branch: string; isDirty: boolean; addedLines: number; removedLines: number; ahead: number; behind: number; lastCommitSha?: string; lastCommitMsg?: string }>('get_git_info', { cwd });
-        setGitInfo(info);
+        if (!cancelled) setGitInfo(info);
       } catch { /* ignore */ }
+      finally { fetching = false; }
     };
     fetchGitInfo();
-    const interval = setInterval(fetchGitInfo, 10000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchGitInfo, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [threadDetail?.cwd, threadGroups]);
 
   const refreshThreadDetail = useCallback(async (threadId: string) => {

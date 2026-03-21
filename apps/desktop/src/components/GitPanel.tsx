@@ -78,36 +78,44 @@ export function GitPanel({
   const [activeSection, setActiveSection] = useState<'changes' | 'history'>('changes');
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fetchingStatusRef = useRef(false);
+  const fetchingLogRef = useRef(false);
 
   const fetchStatus = useCallback(async () => {
-    if (!cwd) return;
+    if (!cwd || fetchingStatusRef.current) return;
+    fetchingStatusRef.current = true;
     try {
       const result = await invoke<GitDetailedStatus>('get_git_status_detailed', { cwd });
       setStatus(result);
       setError(null);
     } catch (e) {
       setError(String(e));
+    } finally {
+      fetchingStatusRef.current = false;
     }
   }, [cwd]);
 
   const fetchLog = useCallback(async () => {
-    if (!cwd) return;
+    if (!cwd || fetchingLogRef.current) return;
+    fetchingLogRef.current = true;
     try {
       const result = await invoke<CommitEntry[]>('get_git_log', { cwd, limit: 50 });
       setLog(result);
     } catch { /* ignore */ }
+    finally { fetchingLogRef.current = false; }
   }, [cwd]);
 
   useEffect(() => {
     fetchStatus();
-    fetchLog();
-    pollRef.current = setInterval(() => {
-      fetchStatus();
-    }, 5000);
+    pollRef.current = setInterval(fetchStatus, 15000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [fetchStatus, fetchLog]);
+  }, [fetchStatus]);
+
+  useEffect(() => {
+    if (activeSection === 'history') fetchLog();
+  }, [activeSection, fetchLog]);
 
   const handleViewFileDiff = async (file: GitFileStatus, staged: boolean) => {
     if (!cwd) return;
