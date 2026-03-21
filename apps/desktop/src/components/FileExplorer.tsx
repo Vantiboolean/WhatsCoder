@@ -179,6 +179,7 @@ export function FileExplorer({
         title: name,
         content: result.content + (result.truncated ? '\n\n... (file truncated)' : ''),
         language: undefined,
+        path: node.path,
       });
     } catch { /* ignore */ }
   };
