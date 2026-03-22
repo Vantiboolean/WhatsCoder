@@ -1,11 +1,22 @@
+//! Tauri backend for the Codex desktop shell: native commands for Git and the filesystem,
+//! Codex/Claude config files, the optional Codex app-server child process, SQLite-backed
+//! settings and usage, automation scheduling, AI filesystem tools (`dynamic_tools`), and
+//! Claude Code CLI streaming (`claude_api`).
+
+mod automation_scheduler;
+mod claude_api;
+mod database;
+mod dynamic_tools;
+
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
-// ── Codex App-Server process state ────────────────────────────────────────────
+// ── Codex app-server (WebSocket `app-server` child) ───────────────────────────
 static CODEX_SERVER_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 static CODEX_BINARY_PATH: Mutex<Option<String>> = Mutex::new(None);
 
@@ -16,8 +27,12 @@ pub struct CodexServerStatus {
     pub pid: Option<u32>,
 }
 
+/// Spawns `codex app-server` if none is running; reuses an existing healthy child and remembers the binary path for later starts.
 #[tauri::command]
-fn start_codex_server(port: Option<u16>, codex_path: Option<String>) -> Result<CodexServerStatus, String> {
+fn start_codex_server(
+    port: Option<u16>,
+    codex_path: Option<String>,
+) -> Result<CodexServerStatus, String> {
     let mut guard = CODEX_SERVER_PROCESS
         .lock()
         .map_err(|e| format!("Lock error: {e}"))?;
@@ -61,6 +76,7 @@ fn start_codex_server(port: Option<u16>, codex_path: Option<String>) -> Result<C
     })
 }
 
+/// Kills the managed app-server child if present; no-op when nothing was started from this process.
 #[tauri::command]
 fn stop_codex_server() -> Result<(), String> {
     let mut guard = CODEX_SERVER_PROCESS
@@ -68,13 +84,16 @@ fn stop_codex_server() -> Result<(), String> {
         .map_err(|e| format!("Lock error: {e}"))?;
 
     if let Some(mut child) = guard.take() {
-        child.kill().map_err(|e| format!("Failed to kill process: {e}"))?;
+        child
+            .kill()
+            .map_err(|e| format!("Failed to kill process: {e}"))?;
         let _ = child.wait();
     }
 
     Ok(())
 }
 
+/// Uses `try_wait` to detect a dead child so the UI does not assume the server is up after an external crash.
 #[tauri::command]
 fn get_codex_server_status() -> Result<CodexServerStatus, String> {
     let mut guard = CODEX_SERVER_PROCESS
@@ -102,9 +121,14 @@ fn get_codex_server_status() -> Result<CodexServerStatus, String> {
 }
 
 fn codex_exe_name() -> &'static str {
-    if cfg!(target_os = "windows") { "codex.exe" } else { "codex" }
+    if cfg!(target_os = "windows") {
+        "codex.exe"
+    } else {
+        "codex"
+    }
 }
 
+/// Heuristic install locations (Cargo, npm, NVM, Homebrew, etc.) when `codex` is not on `PATH`.
 #[tauri::command]
 fn find_codex_candidates() -> Vec<String> {
     let mut candidates = Vec::new();
@@ -155,6 +179,7 @@ fn find_codex_candidates() -> Vec<String> {
     candidates
 }
 
+/// Blocking native file picker; returns the path chosen by the user (optional cancel).
 #[tauri::command]
 fn pick_codex_binary(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let mut builder = app.dialog().file().set_title("Select Codex Binary");
@@ -166,6 +191,8 @@ fn pick_codex_binary(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let result = builder.blocking_pick_file();
     Ok(result.map(|p| p.to_string()))
 }
+
+// ── Git (subprocess `git` in `cwd`) ───────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,6 +210,8 @@ pub struct GitInfo {
     pub last_commit_msg: Option<String>,
 }
 
+// ── Codex `~/.codex/config.toml` (structured subset for the UI) ────────────────
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexConfig {
@@ -193,6 +222,8 @@ pub struct CodexConfig {
     pub instructions: Option<String>,
     pub notify: Option<bool>,
 }
+
+// ── Host and app version (no secrets) ─────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -230,6 +261,7 @@ fn run_git(cwd: &str, args: &[&str]) -> Option<String> {
         })
 }
 
+/// Aggregates porcelain status, shortstat (working tree + staged), and `HEAD...@{u}` ahead/behind (zero if no upstream).
 #[tauri::command]
 fn get_git_info(cwd: String) -> Result<GitInfo, String> {
     let branch = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
@@ -328,8 +360,8 @@ fn read_codex_config() -> Result<CodexConfig, String> {
     let content =
         std::fs::read_to_string(&config_path).map_err(|e| format!("Failed to read config: {e}"))?;
 
-    let table: toml::Table = toml::from_str(&content)
-        .map_err(|e| format!("Failed to parse config: {e}"))?;
+    let table: toml::Table =
+        toml::from_str(&content).map_err(|e| format!("Failed to parse config: {e}"))?;
 
     let str_val = |key: &str| -> Option<String> {
         table.get(key).and_then(|v| v.as_str()).map(str::to_string)
@@ -357,6 +389,7 @@ fn read_codex_config() -> Result<CodexConfig, String> {
     })
 }
 
+/// Merges one key into `config.toml`; only `notify` is serialized as a TOML bool (`value` is `"true"` / `"false"`).
 #[tauri::command]
 fn write_codex_config(key: String, value: String) -> Result<(), String> {
     let config_dir = codex_dir()?;
@@ -369,10 +402,9 @@ fn write_codex_config(key: String, value: String) -> Result<(), String> {
         String::new()
     };
 
-    let mut table: toml::Table = toml::from_str(&content)
-        .unwrap_or_default();
+    let mut table: toml::Table = toml::from_str(&content).unwrap_or_default();
 
-    // Handle boolean keys specially
+    // `notify` must round-trip as bool in TOML; other keys stay strings for simplicity.
     if key == "notify" {
         let bool_val = value == "true";
         table.insert(key, toml::Value::Boolean(bool_val));
@@ -380,8 +412,8 @@ fn write_codex_config(key: String, value: String) -> Result<(), String> {
         table.insert(key, toml::Value::String(value));
     }
 
-    let new_content = toml::to_string_pretty(&table)
-        .map_err(|e| format!("Failed to serialize config: {e}"))?;
+    let new_content =
+        toml::to_string_pretty(&table).map_err(|e| format!("Failed to serialize config: {e}"))?;
 
     std::fs::write(&config_path, new_content)
         .map_err(|e| format!("Failed to write config: {e}"))?;
@@ -405,6 +437,9 @@ fn get_system_info(app: tauri::AppHandle) -> SystemInfo {
     }
 }
 
+// ── Workspace: discover nested repos ────────────────────────────────────────
+
+/// Immediate subdirectories of `cwd` that contain `.git` (hidden dirs excluded); used for multi-repo pickers.
 #[tauri::command]
 fn list_project_folders(cwd: String) -> Result<Vec<String>, String> {
     let path = PathBuf::from(&cwd);
@@ -429,6 +464,8 @@ fn list_project_folders(cwd: String) -> Result<Vec<String>, String> {
 
     Ok(folders)
 }
+
+// ── Git: detailed status, diffs, log, staging ───────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -520,6 +557,7 @@ fn batch_diff_stats(cwd: &str, staged: bool) -> std::collections::HashMap<String
     map
 }
 
+/// Porcelain lines split into staged vs unstaged rows with `--numstat` additions/deletions per path.
 #[tauri::command]
 fn get_git_status_detailed(cwd: String) -> Result<GitDetailedStatus, String> {
     let branch = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
@@ -578,6 +616,7 @@ fn get_git_status_detailed(cwd: String) -> Result<GitDetailedStatus, String> {
     })
 }
 
+/// Unified diff for a path; for untracked files with no blob, synthesizes a `/dev/null` patch from disk so the UI still shows content.
 #[tauri::command]
 fn get_git_diff(cwd: String, file_path: String, staged: bool) -> Result<String, String> {
     let args: Vec<&str> = if staged {
@@ -591,7 +630,9 @@ fn get_git_diff(cwd: String, file_path: String, staged: bool) -> Result<String, 
         let show = run_git(&cwd, &["show", &format!(":{}", file_path)]);
         if show.is_none() {
             if let Ok(content) = std::fs::read_to_string(PathBuf::from(&cwd).join(&file_path)) {
-                let lines: Vec<String> = content.lines().enumerate()
+                let lines: Vec<String> = content
+                    .lines()
+                    .enumerate()
                     .map(|(_i, l)| format!("+{}", l))
                     .collect();
                 return Ok(format!(
@@ -611,7 +652,11 @@ fn get_git_log(cwd: String, limit: u32) -> Result<Vec<CommitEntry>, String> {
     let limit_str = format!("-{}", limit);
     let output = run_git(
         &cwd,
-        &["log", &limit_str, "--pretty=format:%H%n%h%n%s%n%an%n%ai%n---END---"],
+        &[
+            "log",
+            &limit_str,
+            "--pretty=format:%H%n%h%n%s%n%an%n%ai%n---END---",
+        ],
     )
     .unwrap_or_default();
 
@@ -689,6 +734,9 @@ fn get_git_commit_diff(cwd: String, sha: String) -> Result<String, String> {
         .ok_or_else(|| "Failed to get commit diff".to_string())
 }
 
+// ── Filesystem (explorer; heavy dirs omitted) ─────────────────────────────────
+
+/// Lists one level; skips dotfiles and common build/vendor folders to keep trees navigable in the UI.
 #[tauri::command]
 fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
     let dir_path = PathBuf::from(&path);
@@ -697,8 +745,8 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
     }
 
     let mut entries = Vec::new();
-    let read_dir = std::fs::read_dir(&dir_path)
-        .map_err(|e| format!("Failed to read directory: {e}"))?;
+    let read_dir =
+        std::fs::read_dir(&dir_path).map_err(|e| format!("Failed to read directory: {e}"))?;
 
     for entry in read_dir.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
@@ -709,7 +757,12 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
         let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
         let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
 
-        if is_dir && matches!(name.as_str(), "node_modules" | "target" | "dist" | "build" | "__pycache__" | ".next" | ".nuxt") {
+        if is_dir
+            && matches!(
+                name.as_str(),
+                "node_modules" | "target" | "dist" | "build" | "__pycache__" | ".next" | ".nuxt"
+            )
+        {
             continue;
         }
 
@@ -734,6 +787,7 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(entries)
 }
 
+/// Reads as UTF-8 (lossy); default cap ~512 KiB with `truncated` when larger.
 #[tauri::command]
 fn read_file_content(path: String, max_bytes: Option<u64>) -> Result<FileContent, String> {
     let file_path = PathBuf::from(&path);
@@ -742,19 +796,23 @@ fn read_file_content(path: String, max_bytes: Option<u64>) -> Result<FileContent
     }
 
     let max = max_bytes.unwrap_or(512_000);
-    let meta = std::fs::metadata(&file_path)
-        .map_err(|e| format!("Failed to read metadata: {e}"))?;
+    let meta =
+        std::fs::metadata(&file_path).map_err(|e| format!("Failed to read metadata: {e}"))?;
 
     let truncated = meta.len() > max;
 
-    let bytes = std::fs::read(&file_path)
-        .map_err(|e| format!("Failed to read file: {e}"))?;
-    let slice = if truncated { &bytes[..max as usize] } else { &bytes };
+    let bytes = std::fs::read(&file_path).map_err(|e| format!("Failed to read file: {e}"))?;
+    let slice = if truncated {
+        &bytes[..max as usize]
+    } else {
+        &bytes
+    };
     let content = String::from_utf8_lossy(slice).to_string();
 
     Ok(FileContent { content, truncated })
 }
 
+/// Writes bytes as-is; parent must exist (no `mkdir -p`).
 #[tauri::command]
 fn write_file_content(path: String, content: String) -> Result<(), String> {
     let file_path = PathBuf::from(&path);
@@ -763,8 +821,7 @@ fn write_file_content(path: String, content: String) -> Result<(), String> {
             return Err("Parent directory does not exist".to_string());
         }
     }
-    std::fs::write(&file_path, content.as_bytes())
-        .map_err(|e| format!("Failed to write file: {e}"))
+    std::fs::write(&file_path, content.as_bytes()).map_err(|e| format!("Failed to write file: {e}"))
 }
 
 fn read_prompts_from_dir(dir: &PathBuf) -> Vec<PromptItem> {
@@ -795,6 +852,8 @@ fn read_prompts_from_dir(dir: &PathBuf) -> Vec<PromptItem> {
     prompts
 }
 
+// ── Prompts (`~/.codex/prompts` and workspace `.codex/prompts`) ───────────────
+
 #[tauri::command]
 fn list_prompts(cwd: Option<String>) -> Result<PromptsList, String> {
     let general_dir = codex_dir()?.join("prompts");
@@ -812,9 +871,10 @@ fn list_prompts(cwd: Option<String>) -> Result<PromptsList, String> {
 
 #[tauri::command]
 fn read_prompt(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read prompt: {e}"))
+    std::fs::read_to_string(&path)        .map_err(|e| format!("Failed to read prompt: {e}"))
 }
+
+// ── Native folder picker & OS file manager ──────────────────────────────────
 
 #[tauri::command]
 fn pick_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
@@ -827,6 +887,7 @@ fn pick_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
     Ok(result.map(|p| p.to_string()))
 }
 
+/// Opens `path` in Explorer / Finder / `xdg-open` depending on the host OS.
 #[tauri::command]
 fn open_in_explorer(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -853,6 +914,109 @@ fn open_in_explorer(path: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── Claude & Codex on-disk config (import / raw read-write for providers UI) ─
+
+fn claude_dir() -> Result<PathBuf, String> {
+    dirs_next::home_dir()
+        .map(|home| home.join(".claude"))
+        .ok_or("Cannot find home directory".to_string())
+}
+
+#[tauri::command]
+fn read_claude_settings() -> Result<String, String> {
+    let settings_path = claude_dir()?.join("settings.json");
+    if !settings_path.exists() {
+        return Ok("{}".to_string());
+    }
+    std::fs::read_to_string(&settings_path)
+        .map_err(|e| format!("Failed to read Claude settings: {e}"))
+}
+
+#[tauri::command]
+fn write_claude_settings(json: String) -> Result<(), String> {
+    let claude = claude_dir()?;
+    std::fs::create_dir_all(&claude).map_err(|e| format!("Failed to create .claude dir: {e}"))?;
+    let settings_path = claude.join("settings.json");
+    std::fs::write(&settings_path, json.as_bytes())
+        .map_err(|e| format!("Failed to write Claude settings: {e}"))
+}
+
+#[tauri::command]
+fn read_codex_auth() -> Result<String, String> {
+    let auth_path = codex_dir()?.join("auth.toml");
+    if !auth_path.exists() {
+        return Ok(String::new());
+    }
+    std::fs::read_to_string(&auth_path).map_err(|e| format!("Failed to read Codex auth: {e}"))
+}
+
+#[tauri::command]
+fn read_codex_config_full() -> Result<String, String> {
+    let config_path = codex_dir()?.join("config.toml");
+    if !config_path.exists() {
+        return Ok(String::new());
+    }
+    std::fs::read_to_string(&config_path).map_err(|e| format!("Failed to read Codex config: {e}"))
+}
+
+#[tauri::command]
+fn write_codex_full_config(auth: String, config: String) -> Result<(), String> {
+    let dir = codex_dir()?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create .codex dir: {e}"))?;
+    std::fs::write(dir.join("auth.toml"), auth.as_bytes())
+        .map_err(|e| format!("Failed to write auth.toml: {e}"))?;
+    std::fs::write(dir.join("config.toml"), config.as_bytes())
+        .map_err(|e| format!("Failed to write config.toml: {e}"))?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedProviderConfig {
+    pub settings_config: String,
+}
+
+/// Reads the other app's config from well-known paths so the desktop can seed provider settings without manual copy-paste.
+#[tauri::command]
+fn import_current_provider_config(app_type: String) -> Result<ImportedProviderConfig, String> {
+    match app_type.as_str() {
+        "claude" => {
+            let settings_path = claude_dir()?.join("settings.json");
+            let content = if settings_path.exists() {
+                std::fs::read_to_string(&settings_path)
+                    .map_err(|e| format!("Failed to read Claude settings: {e}"))?
+            } else {
+                "{}".to_string()
+            };
+            Ok(ImportedProviderConfig {
+                settings_config: content,
+            })
+        }
+        "codex" => {
+            let dir = codex_dir()?;
+            let auth = if dir.join("auth.toml").exists() {
+                std::fs::read_to_string(dir.join("auth.toml"))
+                    .map_err(|e| format!("Failed to read auth.toml: {e}"))?
+            } else {
+                String::new()
+            };
+            let config = if dir.join("config.toml").exists() {
+                std::fs::read_to_string(dir.join("config.toml"))
+                    .map_err(|e| format!("Failed to read config.toml: {e}"))?
+            } else {
+                String::new()
+            };
+            let blob = serde_json::json!({ "auth": auth, "config": config });
+            Ok(ImportedProviderConfig {
+                settings_config: blob.to_string(),
+            })
+        }
+        _ => Err(format!("Unsupported app type: {app_type}")),
+    }
+}
+
+// ── Process cleanup & Tauri entry ───────────────────────────────────────────
+
 fn cleanup_codex_server() {
     if let Ok(mut guard) = CODEX_SERVER_PROCESS.lock() {
         if let Some(mut child) = guard.take() {
@@ -869,8 +1033,18 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
-        .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // Initialize the Rust-managed SQLite database
+            let app_dir = app.path().app_data_dir().expect("failed to resolve app data dir");
+            std::fs::create_dir_all(&app_dir).ok();
+            let db_path = app_dir.join("codex.db");
+            database::init(&db_path).expect("failed to initialize database");
+
+            app.manage(automation_scheduler::AutomationSchedulerState::default());
+            automation_scheduler::start_background_scheduler(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_git_info,
             get_git_status_detailed,
@@ -883,6 +1057,9 @@ pub fn run() {
             list_directory,
             read_file_content,
             write_file_content,
+            dynamic_tools::tool_read_file,
+            dynamic_tools::tool_list_directory,
+            dynamic_tools::tool_search_in_files,
             list_prompts,
             read_prompt,
             pick_folder,
@@ -896,6 +1073,78 @@ pub fn run() {
             get_codex_server_status,
             find_codex_candidates,
             pick_codex_binary,
+            read_claude_settings,
+            write_claude_settings,
+            read_codex_auth,
+            read_codex_config_full,
+            write_codex_full_config,
+            import_current_provider_config,
+            automation_scheduler::sync_automation_scheduler,
+            claude_api::claude_send_message,
+            claude_api::claude_interrupt,
+            // Database commands – settings
+            database::db_get_setting,
+            database::db_set_setting,
+            database::db_get_all_settings,
+            // Database commands – chat config
+            database::db_get_chat_config,
+            database::db_save_chat_config,
+            database::db_delete_chat_config,
+            // Database commands – chat history
+            database::db_add_chat_message,
+            database::db_get_chat_messages,
+            database::db_get_all_chat_history,
+            database::db_search_chat_history,
+            // Database commands – connections
+            database::db_list_connections,
+            database::db_save_connection,
+            database::db_delete_connection,
+            database::db_set_default_connection,
+            // Database commands – providers
+            database::db_list_providers,
+            database::db_get_current_provider_id,
+            database::db_add_provider,
+            database::db_update_provider,
+            database::db_delete_provider,
+            database::db_switch_provider,
+            // Database commands – automations
+            database::db_list_automations,
+            database::db_get_automation,
+            database::db_create_automation,
+            database::db_update_automation,
+            database::db_delete_automation,
+            // Database commands – automation runs
+            database::db_list_automation_runs,
+            database::db_list_running_automation_runs,
+            database::db_create_automation_run,
+            database::db_update_automation_run,
+            // Database commands – Claude sessions
+            database::db_create_claude_session,
+            database::db_list_claude_sessions,
+            database::db_get_claude_session,
+            database::db_update_claude_session,
+            database::db_delete_claude_session,
+            // Database commands – Claude messages
+            database::db_add_claude_message,
+            database::db_get_claude_messages,
+            database::db_delete_claude_message,
+            // Database commands – scheduling helpers
+            database::compute_next_run,
+            database::compute_retry_delay,
+            // Database commands – usage & analytics
+            database::db_get_usage_summary,
+            database::db_get_usage_trends,
+            database::db_get_provider_stats,
+            database::db_get_model_stats,
+            database::db_get_request_logs,
+            database::db_get_request_detail,
+            // Database commands – model pricing
+            database::db_list_model_pricing,
+            database::db_upsert_model_pricing,
+            database::db_delete_model_pricing,
+            // Database commands – generic raw SQL (Kanban)
+            database::db_raw_execute,
+            database::db_raw_select,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

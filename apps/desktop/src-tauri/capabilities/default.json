@@ -22,6 +22,7 @@
     "window-state:allow-restore-state",
     "window-state:allow-save-window-state",
     "sql:default",
+    "sql:allow-execute",
     "dialog:default"
   ]
 }
