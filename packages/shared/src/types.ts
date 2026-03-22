@@ -34,6 +34,13 @@ export type GitInfo = {
   originUrl?: string | null;
 };
 
+export type ThreadContinuation = {
+  sourceThreadId: string;
+  sourceProvider?: string | null;
+  sourceThreadName?: string | null;
+  compactedMessages?: number | null;
+};
+
 export type ThreadSummary = {
   id: string;
   preview: string;
@@ -50,6 +57,7 @@ export type ThreadSummary = {
   createdAt: number;
   updatedAt?: number;
   status?: ThreadStatus;
+  continuation?: ThreadContinuation | null;
 };
 
 export type TurnError = {

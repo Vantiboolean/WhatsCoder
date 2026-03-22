@@ -66,6 +66,19 @@ function createTextInput(text: string) {
   return [{ type: 'text' as const, text }];
 }
 
+type DynamicToolSpec = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  deferLoading?: boolean;
+};
+
+type StartThreadParams = {
+  model?: string;
+  cwd?: string;
+  dynamicTools?: DynamicToolSpec[];
+};
+
 export class CodexClient {
   private ws: WebSocket | null = null;
   private nextId = 10_000;
@@ -373,7 +386,7 @@ export class CodexClient {
     return result.thread;
   }
 
-  async startThread(params?: { model?: string; cwd?: string }): Promise<ThreadSummary> {
+  async startThread(params?: StartThreadParams): Promise<ThreadSummary> {
     const { model, cwd, ...rest } = params ?? {};
     const result = (await this.send('thread/start', {
       ...(model != null ? { model } : {}),

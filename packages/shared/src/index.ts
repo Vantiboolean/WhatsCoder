@@ -7,6 +7,7 @@ export type {
   JsonRpcResponse,
   JsonRpcServerRequest,
   ServerMessage,
+  ThreadContinuation,
   ThreadSummary,
   ThreadDetail,
   ThreadStatus,

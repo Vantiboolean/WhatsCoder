@@ -17,13 +17,23 @@ export const colors = {
     secondary: '#a0a0a0',
     tertiary: '#6e6e6e',
     inverse: '#0d0d0e',
-    link: '#10A37F',
+    link: '#339cff',
   },
   accent: {
-    green: '#10A37F',
-    greenHover: '#0D8A6A',
-    greenMuted: 'rgba(16, 163, 127, 0.15)',
-    greenBorder: 'rgba(16, 163, 127, 0.3)',
+    // Codex blue — dark mode
+    primary: '#339cff',
+    primaryHover: '#1a8aff',
+    primaryMuted: 'rgba(51, 156, 255, 0.15)',
+    primaryBorder: 'rgba(51, 156, 255, 0.3)',
+    // Codex blue — light mode
+    primaryLight: '#0285ff',
+    primaryLightHover: '#006ee0',
+    // Semantic green for ok/diff states
+    emerald: '#40c977',
+    emeraldLight: '#00a240',
+    // Skill purple
+    skill: '#ad7bf9',
+    skillLight: '#924ff7',
   },
   border: {
     primary: '#2a2a2c',
@@ -31,11 +41,11 @@ export const colors = {
     subtle: '#1f1f21',
   },
   status: {
-    active: '#10A37F',
+    active: '#339cff',
     idle: '#6e6e6e',
     error: '#ef4444',
     warning: '#f59e0b',
-    info: '#3b82f6',
+    info: '#339cff',
   },
   item: {
     userMessage: '#1a2332',
