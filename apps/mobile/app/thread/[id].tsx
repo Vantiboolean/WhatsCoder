@@ -13,7 +13,7 @@ import {
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, typography } from '../../src/lib/theme';
-import { codexClient, type ThreadItem, type Turn, type ConnectionState } from '@codex-mobile/shared';
+import { codexClient, type ThreadItem, type Turn, type ConnectionState } from '@whats-coder/shared';
 import { ChatBubble } from '../../src/components/ChatBubble';
 import { ChatInput } from '../../src/components/ChatInput';
 import { ConnectionBanner } from '../../src/components/ConnectionBanner';

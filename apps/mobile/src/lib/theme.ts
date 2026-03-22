@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 
-export { colors, spacing, radius } from '@codex-mobile/shared';
+export { colors, spacing, radius } from '@whats-coder/shared';
 
 export const typography = {
   fontFamily: {

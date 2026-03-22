@@ -3,7 +3,7 @@
  * `DESKTOP_DYNAMIC_TOOL_SPECS` mirrors what the model sees—`name`, `description`, and JSON-Schema-shaped `inputSchema` (plus optional `deferLoading`).
  */
 import { invoke } from '@tauri-apps/api/core';
-import type { DynamicToolCallContentItem } from '@codex-mobile/shared';
+import type { DynamicToolCallContentItem } from '@whats-coder/shared';
 
 const DEFAULT_READ_MAX_BYTES = 32_768;
 const DEFAULT_LIST_LIMIT = 200;

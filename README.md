@@ -1,4 +1,4 @@
-# Codex Mobile
+# Whats Coder
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -7,15 +7,13 @@ A cross-platform client for [OpenAI Codex CLI](https://github.com/openai/codex) 
 ## Project Structure
 
 ```
-codex-mobile/
+whats-coder/
 ├── apps/
 │   ├── mobile/          # React Native (Expo) app for iOS & Android
 │   └── desktop/         # Tauri desktop app (Windows / macOS / Linux)
 ├── packages/
 │   └── shared/          # Shared TypeScript types, WebSocket client, theme
-├── scripts/
-│   ├── live-debug/      # CDP-based live debug utilities
-│   └── ensure-desktop-dev-server.mjs
+├── scripts/             # 根目录辅助脚本（按需添加）
 ├── turbo.json           # Turborepo task configuration
 ├── pnpm-workspace.yaml  # pnpm monorepo workspace
 └── package.json
@@ -69,7 +67,7 @@ pnpm build:desktop
 
 ## How It Works
 
-The apps connect to a locally running [Codex CLI app-server](https://github.com/openai/codex) via WebSocket using a custom JSON-RPC 2.0 protocol. The `@codex-mobile/shared` package provides:
+The apps connect to a locally running [Codex CLI app-server](https://github.com/openai/codex) via WebSocket using a custom JSON-RPC 2.0 protocol. The `@whats-coder/shared` package provides:
 
 - **`CodexClient`** — WebSocket client with automatic reconnection and request/response tracking
 - **Types** — Full TypeScript type definitions for all protocol messages

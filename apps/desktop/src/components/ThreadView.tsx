@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
-import type { ThreadDetail, ThreadItem, Turn } from '@codex-mobile/shared';
+import type { ThreadDetail, ThreadItem, Turn } from '@whats-coder/shared';
 import { summarizeDesktopDynamicTool } from '../lib/dynamicTools';
 
 const PAGE_SIZE = 50;

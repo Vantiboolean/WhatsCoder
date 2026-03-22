@@ -1,18 +1,18 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
-  "productName": "Codex Desktop",
+  "productName": "Whats Coder",
   "version": "0.1.0",
-  "identifier": "com.codex-mobile.desktop",
+  "identifier": "com.whats-coder.desktop",
   "build": {
-    "beforeDevCommand": "node ../../scripts/ensure-desktop-dev-server.mjs",
+    "beforeDevCommand": "pnpm --dir .. dev",
     "devUrl": "http://localhost:6188",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm --dir .. build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
-        "title": "Codex Desktop",
+        "title": "Whats Coder",
         "width": 1200,
         "height": 800,
         "minWidth": 800,

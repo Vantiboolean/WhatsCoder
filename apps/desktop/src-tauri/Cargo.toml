@@ -2,7 +2,7 @@
 name = "codex-desktop"
 version = "0.1.0"
 description = "Codex Desktop - A desktop client for OpenAI Codex App Server"
-authors = ["Codex Mobile"]
+authors = ["Whats Coder"]
 edition = "2021"
 
 [lib]

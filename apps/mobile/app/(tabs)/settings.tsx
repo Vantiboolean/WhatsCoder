@@ -11,7 +11,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, radius, typography } from '../../src/lib/theme';
-import { codexClient, type ConnectionState, type SavedConnection } from '@codex-mobile/shared';
+import { codexClient, type ConnectionState, type SavedConnection } from '@whats-coder/shared';
 import {
   loadConnections,
   removeConnection,
@@ -200,7 +200,7 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>ABOUT</Text>
         <View style={styles.aboutCard}>
-          <Text style={styles.aboutLabel}>Codex Mobile</Text>
+          <Text style={styles.aboutLabel}>Whats Coder</Text>
           <Text style={styles.aboutValue}>v1.0.0</Text>
         </View>
       </View>

@@ -3,7 +3,7 @@ import { View, FlatList, StyleSheet, RefreshControl, Alert } from 'react-native'
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing } from '../../src/lib/theme';
-import { codexClient, type ConnectionState, type ThreadSummary } from '@codex-mobile/shared';
+import { codexClient, type ConnectionState, type ThreadSummary } from '@whats-coder/shared';
 import { getDefaultConnection, buildWsUrl } from '../../src/store/connection-store';
 import { ThreadListItem } from '../../src/components/ThreadListItem';
 import { ConnectionBanner } from '../../src/components/ConnectionBanner';

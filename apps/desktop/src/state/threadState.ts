@@ -2,7 +2,7 @@
  * Pure helpers to mutate `ThreadDetail` for live UI: Codex pushes JSON-RPC-style `method` + `params` events;
  * `applyServerEventToThreadDetail` folds them into turns/items (including optimistic IDs and streaming deltas).
  */
-import type { ThreadDetail, ThreadItem, Turn } from '@codex-mobile/shared';
+import type { ThreadDetail, ThreadItem, Turn } from '@whats-coder/shared';
 
 const OPTIMISTIC_TURN_PREFIX = 'optimistic-turn-';
 const OPTIMISTIC_ITEM_PREFIX = 'optimistic-';

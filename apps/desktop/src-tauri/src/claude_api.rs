@@ -122,7 +122,7 @@ fn claude_debug_log_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .ok()
         .or_else(dirs_next::data_dir)?;
-    Some(base.join("com.codex-mobile.desktop").join("claude-debug.log"))
+    Some(base.join("com.whats-coder.desktop").join("claude-debug.log"))
 }
 
 fn write_claude_debug_log(stage: &str, detail: impl AsRef<str>) {
@@ -879,7 +879,7 @@ fn create_prompt_temp_file(prompt: &str) -> Result<PathBuf, ClaudeRunError> {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     path.push(format!(
-        "codex-mobile-claude-prompt-{}-{stamp}.txt",
+        "whats-coder-claude-prompt-{}-{stamp}.txt",
         std::process::id()
     ));
 

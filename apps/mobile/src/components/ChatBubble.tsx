@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, typography } from '../lib/theme';
-import type { ThreadItem } from '@codex-mobile/shared';
+import type { ThreadItem } from '@whats-coder/shared';
 
 type Props = {
   item: ThreadItem;

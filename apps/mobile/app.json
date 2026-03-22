@@ -1,12 +1,12 @@
 {
   "expo": {
-    "name": "Codex Mobile",
-    "slug": "codex-mobile",
+    "name": "Whats Coder",
+    "slug": "whats-coder",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "scheme": "codex-mobile",
+    "scheme": "whats-coder",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.codex.mobile"
+      "bundleIdentifier": "com.whatscoder.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +23,7 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "package": "com.codex.mobile"
+      "package": "com.whatscoder.app"
     },
     "web": {
       "favicon": "./assets/favicon.png",

@@ -26,7 +26,7 @@ import {
   type KanbanComment,
   type KanbanIssueRun,
 } from '../lib/kanbanDb';
-import type { ThreadSummary, ThreadDetail, ThreadItem, Turn } from '@codex-mobile/shared';
+import type { ThreadSummary, ThreadDetail, ThreadItem, Turn } from '@whats-coder/shared';
 import { ThreadView } from './ThreadView';
 
 export type KanbanProject = {

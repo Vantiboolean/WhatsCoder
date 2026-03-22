@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, typography } from '../lib/theme';
-import type { ConnectionState } from '@codex-mobile/shared';
+import type { ConnectionState } from '@whats-coder/shared';
 
 type Props = {
   state: ConnectionState;

@@ -1,5 +1,5 @@
 {
-  "name": "@codex-mobile/desktop",
+  "name": "@whats-coder/desktop",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "clean": "rm -rf dist node_modules src-tauri/target"
   },
   "dependencies": {
-    "@codex-mobile/shared": "workspace:*",
+    "@whats-coder/shared": "workspace:*",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-notification": "^2.3.3",

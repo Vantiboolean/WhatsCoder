@@ -345,8 +345,8 @@ export class CodexClient {
   private async initialize() {
     await this.send('initialize', {
       clientInfo: {
-        name: 'codex_mobile',
-        title: 'Codex Mobile',
+        name: 'whats_coder',
+        title: 'Whats Coder',
         version: '1.0.0',
       },
       capabilities: { experimentalApi: true },

@@ -1,10 +1,10 @@
 {
-  "name": "codex-mobile-monorepo",
+  "name": "whats-coder",
   "private": true,
   "scripts": {
-    "dev:mobile": "turbo run dev --filter=@codex-mobile/mobile",
-    "dev:desktop": "turbo run tauri:dev --filter=@codex-mobile/desktop",
-    "build:desktop": "turbo run tauri:build --filter=@codex-mobile/desktop",
+    "dev:mobile": "turbo run dev --filter=@whats-coder/mobile",
+    "dev:desktop": "turbo run tauri:dev --filter=@whats-coder/desktop",
+    "build:desktop": "turbo run tauri:build --filter=@whats-coder/desktop",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean"

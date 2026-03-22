@@ -1,7 +1,7 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import type { ConnectionState, ThreadSummary } from '@codex-mobile/shared';
+import type { ConnectionState, ThreadSummary } from '@whats-coder/shared';
 
 type SidebarView = 'threads' | 'settings' | 'automations' | 'skills' | 'usage' | 'providers' | 'history' | 'kanban';
 

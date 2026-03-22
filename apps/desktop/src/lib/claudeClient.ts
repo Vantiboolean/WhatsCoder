@@ -9,7 +9,7 @@ import type {
   ThreadDetail,
   Turn,
   ModelInfo,
-} from '@codex-mobile/shared';
+} from '@whats-coder/shared';
 import {
   createClaudeSession,
   listClaudeSessions,

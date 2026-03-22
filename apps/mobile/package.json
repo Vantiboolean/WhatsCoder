@@ -1,5 +1,5 @@
 {
-  "name": "@codex-mobile/mobile",
+  "name": "@whats-coder/mobile",
   "version": "1.0.0",
   "private": true,
   "main": "expo-router/entry",
@@ -12,7 +12,7 @@
     "clean": "rm -rf .expo node_modules"
   },
   "dependencies": {
-    "@codex-mobile/shared": "workspace:*",
+    "@whats-coder/shared": "workspace:*",
     "@expo/vector-icons": "^15.1.1",
     "@react-native-async-storage/async-storage": "^3.0.1",
     "expo": "~55.0.8",

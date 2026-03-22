@@ -13,7 +13,7 @@ import {
   type DynamicToolCallContentItem,
   type ChatgptAuthTokensRefreshReason,
   type ChatgptAuthTokensRefreshResponse,
-} from '@codex-mobile/shared';
+} from '@whats-coder/shared';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
@@ -6644,7 +6644,7 @@ function HistoryPanel({
   entries: ChatHistoryEntry[];
   searchQuery: string;
   onSearchChange: (q: string) => void;
-  threads: import('@codex-mobile/shared').ThreadSummary[];
+  threads: import('@whats-coder/shared').ThreadSummary[];
   onSelectMessage: (msg: string) => void;
 }) {
   const today = new Date(); today.setHours(0,0,0,0);

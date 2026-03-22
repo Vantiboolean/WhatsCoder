@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { SavedConnection } from '@codex-mobile/shared';
+import type { SavedConnection } from '@whats-coder/shared';
 
 const STORAGE_KEY = 'codex_connections';
 

@@ -1,6 +1,6 @@
 import { Fragment, memo, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ThreadDetail } from '@codex-mobile/shared';
+import type { ThreadDetail } from '@whats-coder/shared';
 
 type WindowControlsProps = {
   className?: string;
