@@ -1,9 +1,14 @@
+/**
+ * Pure helpers to mutate `ThreadDetail` for live UI: Codex pushes JSON-RPC-style `method` + `params` events;
+ * `applyServerEventToThreadDetail` folds them into turns/items (including optimistic IDs and streaming deltas).
+ */
 import type { ThreadDetail, ThreadItem, Turn } from '@codex-mobile/shared';
 
 const OPTIMISTIC_TURN_PREFIX = 'optimistic-turn-';
 const OPTIMISTIC_ITEM_PREFIX = 'optimistic-';
 const REALTIME_TURN_PREFIX = 'realtime-thread-';
 const THREAD_HOOK_TURN_PREFIX = 'hook-thread-';
+const CLAUDE_TURN_PREFIX = 'claude-turn-';
 
 type Params = Record<string, unknown>;
 
@@ -51,7 +56,11 @@ function cloneThread(thread: ThreadDetail): ThreadDetail {
 }
 
 function isSyntheticTurnId(turnId: string): boolean {
-  return turnId.startsWith(REALTIME_TURN_PREFIX) || turnId.startsWith(THREAD_HOOK_TURN_PREFIX);
+  return (
+    turnId.startsWith(REALTIME_TURN_PREFIX) ||
+    turnId.startsWith(THREAD_HOOK_TURN_PREFIX) ||
+    turnId.startsWith(CLAUDE_TURN_PREFIX)
+  );
 }
 
 function isSyntheticItem(item: ThreadItem): boolean {
@@ -449,6 +458,9 @@ export function findThreadItem(
   return turn?.items.find((item) => item.id === itemId) ?? null;
 }
 
+/**
+ * Reconciles a server snapshot with client-only rows (realtime, hooks, errors) the backend does not round-trip.
+ */
 export function mergeThreadDetailWithLocalState(
   previous: ThreadDetail | null,
   incoming: ThreadDetail,
@@ -489,6 +501,9 @@ export function mergeThreadDetailWithLocalState(
   return merged;
 }
 
+/**
+ * Returns a shallow-copied thread with updated `turns`; unknown `method` values are no-ops (returns the same structure).
+ */
 export function applyServerEventToThreadDetail(
   thread: ThreadDetail | null,
   method: string,
