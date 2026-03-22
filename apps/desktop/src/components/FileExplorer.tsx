@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import type { OverlayView } from './CodeViewer';
 
@@ -103,6 +104,7 @@ export function FileExplorer({
   cwd: string | null;
   onOverlayView: (view: OverlayView) => void;
 }) {
+  const { t } = useTranslation();
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
@@ -208,7 +210,7 @@ export function FileExplorer({
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 7.5V18a2 2 0 002 2h14a2 2 0 002-2V9.5a2 2 0 00-2-2h-6l-2-3H5a2 2 0 00-2 2z" />
         </svg>
-        <span>No project selected</span>
+        <span>{t('fileExplorer.noProjectSelected')}</span>
       </div>
     );
   }
@@ -224,7 +226,7 @@ export function FileExplorer({
           className="fe-search-input"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search files..."
+          placeholder={t('fileExplorer.searchFiles')}
         />
         {search && (
           <button className="fe-search-clear" onClick={() => setSearch('')}>
@@ -236,9 +238,9 @@ export function FileExplorer({
       </div>
       <div className="fe-tree">
         {loading ? (
-          <div className="fe-loading">Loading...</div>
+          <div className="fe-loading">{t('common.loading')}</div>
         ) : filteredTree.length === 0 ? (
-          <div className="fe-loading">{search ? 'No matches found' : 'Empty directory'}</div>
+          <div className="fe-loading">{search ? t('fileExplorer.noMatchesFound') : t('fileExplorer.emptyDirectory')}</div>
         ) : (
           filteredTree.map((node) => (
             <FileTreeItem

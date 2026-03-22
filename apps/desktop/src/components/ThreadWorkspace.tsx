@@ -1,4 +1,5 @@
 import { memo, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ThreadDetail } from '@codex-mobile/shared';
 import { ThreadView } from './ThreadView';
 
@@ -11,6 +12,7 @@ type Props = {
   thread: ThreadDetail;
   isSending: boolean;
   isAgentActive: boolean;
+  isTurnsLoading?: boolean;
   showRawJson: boolean;
   onToggleRawJson: () => void;
   overrideIsProcessing?: boolean;
@@ -18,6 +20,7 @@ type Props = {
   statusHint: string | null;
   contextUsage: { percent: number; usedTokens: number } | null;
   turnStartTime: number | null;
+  onResend?: (text: string) => void;
 };
 
 const ProcessingStatus = memo(function ProcessingStatus({
@@ -31,6 +34,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
   contextUsage: { percent: number; usedTokens: number } | null;
   statusHint: string | null;
 }) {
+  const { t } = useTranslation();
   const [elapsedSec, setElapsedSec] = useState(0);
 
   useEffect(() => {
@@ -55,11 +59,13 @@ const ProcessingStatus = memo(function ProcessingStatus({
   return (
     <div className="status-indicator">
       <span className="status-indicator-dot" />
-      <span className="status-indicator-text">Working</span>
-      <span className="status-indicator-time">{elapsedSec > 0 ? `${elapsedSec}s` : ''}</span>
+      <span className="status-indicator-text">{t('workspace.working')}</span>
+      <span className="status-indicator-time">
+        {elapsedSec > 0 ? t('workspace.elapsedSeconds', { count: elapsedSec }) : ''}
+      </span>
       {contextUsage && (
         <span className="status-indicator-context">
-          {contextUsage.percent}% context left
+          {t('workspace.contextLeft', { percent: contextUsage.percent })}
         </span>
       )}
       {statusHint && <span className="status-indicator-hint">{statusHint}</span>}
@@ -71,6 +77,7 @@ export const ThreadWorkspace = memo(function ThreadWorkspace({
   thread,
   isSending,
   isAgentActive,
+  isTurnsLoading,
   showRawJson,
   onToggleRawJson,
   overrideIsProcessing,
@@ -78,7 +85,9 @@ export const ThreadWorkspace = memo(function ThreadWorkspace({
   statusHint,
   contextUsage,
   turnStartTime,
+  onResend,
 }: Props) {
+  const { t } = useTranslation();
   const lastTurn = thread.turns?.[thread.turns.length - 1];
   const isProcessing =
     overrideIsProcessing ?? Boolean(isSending || isAgentActive || lastTurn?.status === 'inProgress');
@@ -89,20 +98,26 @@ export const ThreadWorkspace = memo(function ThreadWorkspace({
         thread={thread}
         isSending={isSending}
         isAgentActive={isAgentActive}
+        isTurnsLoading={isTurnsLoading}
         showRawJson={showRawJson}
         onToggleRawJson={onToggleRawJson}
         overrideIsProcessing={overrideIsProcessing}
+        onResend={onResend}
       />
       {pendingMessages.length > 0 && isProcessing && (
         <div className="pending-input-preview">
-          <span className="pending-input-label">Queued messages ({pendingMessages.length}):</span>
+          <span className="pending-input-label">
+            {t('workspace.queuedMessages', { count: pendingMessages.length })}
+          </span>
           {pendingMessages.slice(0, 3).map((message) => (
             <span key={message.id} className="pending-input-msg">
               {message.text.length > 60 ? `${message.text.slice(0, 60)}...` : message.text}
             </span>
           ))}
           {pendingMessages.length > 3 && (
-            <span className="pending-input-more">+{pendingMessages.length - 3} more</span>
+            <span className="pending-input-more">
+              {t('workspace.more', { count: pendingMessages.length - 3 })}
+            </span>
           )}
         </div>
       )}

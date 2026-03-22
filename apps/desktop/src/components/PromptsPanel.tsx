@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 
 type PromptItem = {
@@ -19,6 +20,7 @@ export function PromptsPanel({
   cwd: string | null;
   onInsertPrompt: (text: string) => void;
 }) {
+  const { t } = useTranslation();
   const [prompts, setPrompts] = useState<PromptsList>({ workspace: [], general: [] });
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
@@ -75,12 +77,12 @@ export function PromptsPanel({
           <button
             className="pp-send-btn"
             onClick={() => onInsertPrompt(prompt.content)}
-            title="Send to chat"
+            title={t('promptsPanel.sendToChat')}
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M1 11L11 6 1 1v4l4 1-4 1z" />
             </svg>
-            Send
+            {t('common.send')}
           </button>
         </div>
         {isExpanded && (
@@ -103,7 +105,7 @@ export function PromptsPanel({
           className="pp-search-input"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search prompts..."
+          placeholder={t('promptsPanel.searchPrompts')}
         />
         {search && (
           <button className="pp-search-clear" onClick={() => setSearch('')}>
@@ -115,7 +117,7 @@ export function PromptsPanel({
       </div>
 
       {loading ? (
-        <div className="pp-loading">Loading prompts...</div>
+        <div className="pp-loading">{t('promptsPanel.loadingPrompts')}</div>
       ) : (
         <div className="pp-sections">
           <div className="pp-section">
@@ -123,12 +125,12 @@ export function PromptsPanel({
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
               </svg>
-              <span>Workspace Prompts</span>
+              <span>{t('promptsPanel.workspacePrompts')}</span>
               <span className="pp-count">{filteredWorkspace.length}</span>
             </div>
             {filteredWorkspace.length === 0 ? (
               <div className="pp-empty-section">
-                {cwd ? 'No workspace prompts found' : 'No project selected'}
+                {cwd ? t('promptsPanel.noWorkspacePrompts') : t('promptsPanel.noProjectSelected')}
               </div>
             ) : (
               filteredWorkspace.map(renderPromptItem)
@@ -141,11 +143,11 @@ export function PromptsPanel({
                 <circle cx="8" cy="8" r="6" />
                 <path d="M8 4v4l2.5 1.5" />
               </svg>
-              <span>General Prompts</span>
+              <span>{t('promptsPanel.generalPrompts')}</span>
               <span className="pp-count">{filteredGeneral.length}</span>
             </div>
             {filteredGeneral.length === 0 ? (
-              <div className="pp-empty-section">No general prompts found</div>
+              <div className="pp-empty-section">{t('promptsPanel.noGeneralPrompts')}</div>
             ) : (
               filteredGeneral.map(renderPromptItem)
             )}
@@ -154,7 +156,9 @@ export function PromptsPanel({
       )}
 
       <div className="pp-hint">
-        Prompts from <code>{cwd ? `${cwd}/.codex/prompts/` : '~/.codex/prompts/'}</code>
+        {t('promptsPanel.promptsFrom', {
+          path: cwd ? `${cwd}/.codex/prompts/` : '~/.codex/prompts/',
+        })}
       </div>
     </div>
   );

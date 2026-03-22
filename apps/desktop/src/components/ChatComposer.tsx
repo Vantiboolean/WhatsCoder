@@ -8,7 +8,8 @@ import {
   useRef,
   useState,
 } from 'react';
-import { CustomSelect } from './CustomSelect';
+import { useTranslation } from 'react-i18next';
+import { CustomSelect, type SelectOption } from './CustomSelect';
 
 type SkillInfo = {
   name: string;
@@ -18,11 +19,6 @@ type SkillInfo = {
 type AttachedImage = {
   dataUrl: string;
   name: string;
-};
-
-type SelectOption = {
-  value: string;
-  label: string;
 };
 
 type PopupItem = {
@@ -37,23 +33,32 @@ type PopupItem = {
 type PopupMode = 'slash' | 'mention' | null;
 
 const BUILT_IN_COMMANDS: PopupItem[] = [
-  { id: 'cmd-model', icon: 'command', name: 'model', desc: 'Choose model and reasoning effort' },
-  { id: 'cmd-skills', icon: 'command', name: 'skills', desc: 'Browse and manage skills' },
-  { id: 'cmd-review', icon: 'command', name: 'review', desc: 'Review current changes and find issues' },
-  { id: 'cmd-compact', icon: 'command', name: 'compact', desc: 'Summarize conversation to save context' },
-  { id: 'cmd-clear', icon: 'command', name: 'clear', desc: 'Clear terminal and start a new chat' },
-  { id: 'cmd-rename', icon: 'command', name: 'rename', desc: 'Rename the current thread' },
-  { id: 'cmd-diff', icon: 'command', name: 'diff', desc: 'Show git diff including untracked files' },
-  { id: 'cmd-status', icon: 'command', name: 'status', desc: 'Show session configuration and token usage' },
-  { id: 'cmd-plan', icon: 'command', name: 'plan', desc: 'Switch to Plan mode' },
-  { id: 'cmd-fork', icon: 'command', name: 'fork', desc: 'Fork or branch this conversation' },
-  { id: 'cmd-new', icon: 'command', name: 'new', desc: 'Start a new chat' },
-  { id: 'cmd-help', icon: 'command', name: 'help', desc: 'Show available commands and skills' },
+  { id: 'cmd-model', icon: 'command', name: 'model', desc: 'composer.cmdModel' },
+  { id: 'cmd-skills', icon: 'command', name: 'skills', desc: 'composer.cmdSkills' },
+  { id: 'cmd-review', icon: 'command', name: 'review', desc: 'composer.cmdReview' },
+  { id: 'cmd-compact', icon: 'command', name: 'compact', desc: 'composer.cmdCompact' },
+  { id: 'cmd-clear', icon: 'command', name: 'clear', desc: 'composer.cmdClear' },
+  { id: 'cmd-rename', icon: 'command', name: 'rename', desc: 'composer.cmdRename' },
+  { id: 'cmd-diff', icon: 'command', name: 'diff', desc: 'composer.cmdDiff' },
+  { id: 'cmd-status', icon: 'command', name: 'status', desc: 'composer.cmdStatus' },
+  { id: 'cmd-plan', icon: 'command', name: 'plan', desc: 'composer.cmdPlan' },
+  { id: 'cmd-fork', icon: 'command', name: 'fork', desc: 'composer.cmdFork' },
+  { id: 'cmd-new', icon: 'command', name: 'new', desc: 'composer.cmdNew' },
+  { id: 'cmd-help', icon: 'command', name: 'help', desc: 'composer.cmdHelp' },
 ];
 
 export type ChatComposerHandle = {
   focus: () => void;
   setDraftText: (text: string) => void;
+};
+
+export type ModelSwitchPreview = {
+  mode: 'fresh' | 'same-thread' | 'handoff';
+  currentProviderLabel: string | null;
+  targetProviderLabel: string;
+  turnCount: number;
+  willCompact: boolean;
+  compactedMessages: number;
 };
 
 type Props = {
@@ -67,6 +72,7 @@ type Props = {
   modelOptions: SelectOption[];
   selectedModel: string;
   onSelectModel: (value: string) => void;
+  modelSwitchPreview?: ModelSwitchPreview | null;
   reasoning: string;
   reasoningOptions: SelectOption[];
   onSelectReasoning: (value: string) => void;
@@ -80,6 +86,7 @@ type Props = {
   onSubmit: (payload: { text: string; attachedImages: AttachedImage[] }) => void | Promise<void>;
   onExecuteCommand: (command: string) => void | Promise<void>;
   onInterrupt?: () => void | Promise<void>;
+  backendType?: 'codex' | 'claude';
 };
 
 function ComposerImpl({
@@ -93,6 +100,7 @@ function ComposerImpl({
   modelOptions,
   selectedModel,
   onSelectModel,
+  modelSwitchPreview,
   reasoning,
   reasoningOptions,
   onSelectReasoning,
@@ -106,10 +114,13 @@ function ComposerImpl({
   onSubmit,
   onExecuteCommand,
   onInterrupt,
+  backendType,
 }: Props, ref: React.ForwardedRef<ChatComposerHandle>) {
+  const { t } = useTranslation();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
+  const submitInFlightRef = useRef(false);
   const [inputText, setInputText] = useState('');
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
   const [slashOpen, setSlashOpen] = useState(false);
@@ -168,10 +179,10 @@ function ComposerImpl({
         icon: 'skill' as const,
         name: skill.name,
         desc: skill.path.split('/').pop() || skill.path,
-        badge: 'Skill',
+        badge: t('composer.skill'),
         insert: `$${skill.name}`,
       })),
-    [skills],
+    [skills, t],
   );
 
   const popupMode: PopupMode = slashOpen
@@ -193,10 +204,14 @@ function ComposerImpl({
     if (!popupFilter) {
       return source;
     }
-    return source.filter((item) =>
-      item.name.toLowerCase().includes(popupFilter) || item.desc.toLowerCase().includes(popupFilter),
-    );
-  }, [mentionItems, popupFilter, popupMode]);
+    return source.filter((item) => {
+      const descText = item.icon === 'command' ? t(item.desc) : item.desc;
+      return (
+        item.name.toLowerCase().includes(popupFilter) ||
+        descText.toLowerCase().includes(popupFilter)
+      );
+    });
+  }, [mentionItems, popupFilter, popupMode, t]);
 
   const syncSlashState = useCallback((value: string) => {
     const hasSlashCommand = value.length > 0 && value.startsWith('/') && !value.includes('\n') && value.indexOf(' ') === -1;
@@ -303,7 +318,7 @@ function ComposerImpl({
   }, []);
 
   const handleSubmit = useCallback(async () => {
-    if (disabled) {
+    if (disabled || submitInFlightRef.current) {
       return;
     }
 
@@ -319,7 +334,12 @@ function ComposerImpl({
 
     const nextAttachments = attachedImages;
     clearDraft();
-    await onSubmit({ text, attachedImages: nextAttachments });
+    submitInFlightRef.current = true;
+    try {
+      await onSubmit({ text, attachedImages: nextAttachments });
+    } finally {
+      submitInFlightRef.current = false;
+    }
   }, [attachedImages, clearDraft, disabled, inputText, onSubmit]);
 
   const handleExecuteCommand = useCallback(async (command: string) => {
@@ -345,13 +365,13 @@ function ComposerImpl({
   }, [handleExecuteCommand, inputText, setDraftText]);
 
   const handleInputKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      void handleSubmit();
+    if (isComposingRef.current) {
       return;
     }
 
-    if (isComposingRef.current) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void handleSubmit();
       return;
     }
 
@@ -411,13 +431,25 @@ function ComposerImpl({
   }, [handlePopupSelect, popupItems, slashIdx, slashOpen]);
 
   const canSubmitInput = inputText.trim().length > 0 || attachedImages.length > 0;
+  const modelSwitchCompactLabel = modelSwitchPreview?.willCompact
+    ? `Compact ${modelSwitchPreview.compactedMessages} msg${modelSwitchPreview.compactedMessages === 1 ? '' : 's'}`
+    : 'No compact';
+  const modelSwitchPrimaryText = modelSwitchPreview
+    ? modelSwitchPreview.mode === 'fresh'
+      ? `Next send starts a new ${modelSwitchPreview.targetProviderLabel} thread`
+      : modelSwitchPreview.mode === 'same-thread'
+        ? `Next send stays in this ${modelSwitchPreview.targetProviderLabel} thread`
+        : `Next send hands off from ${modelSwitchPreview.currentProviderLabel ?? 'the current thread'} to ${modelSwitchPreview.targetProviderLabel}`
+    : null;
 
   return (
     <div className={className ?? 'bottom-bar'}>
       <div className="bottom-bar-input">
         {slashOpen && popupItems.length > 0 && (
           <div className="slash-popup">
-            <div className="slash-popup-header">{popupMode === 'slash' ? 'Commands' : 'Skills & Mentions'}</div>
+            <div className="slash-popup-header">
+              {popupMode === 'slash' ? t('composer.commands') : t('composer.skillsAndMentions')}
+            </div>
             <div className="slash-popup-list">
               {popupItems.map((item, index) => (
                 <button
@@ -442,7 +474,9 @@ function ComposerImpl({
                   </span>
                   <span className="slash-popup-info">
                     <span className="slash-popup-name">{popupMode === 'slash' ? '/' : '$'}{item.name}</span>
-                    <span className="slash-popup-desc">{item.desc}</span>
+                    <span className="slash-popup-desc">
+                      {item.icon === 'command' ? t(item.desc) : item.desc}
+                    </span>
                   </span>
                   {item.badge && <span className="slash-popup-badge">{item.badge}</span>}
                 </button>
@@ -470,6 +504,23 @@ function ComposerImpl({
           </div>
         )}
 
+        {modelSwitchPreview && modelSwitchPrimaryText && (
+          <div className="composer-switch-banner" role="status">
+            <span className="composer-switch-banner__eyebrow">Model switch</span>
+            <span className="composer-switch-banner__text">{modelSwitchPrimaryText}</span>
+            <div className="composer-switch-banner__chips">
+              <span className="composer-switch-banner__chip">
+                {modelSwitchPreview.mode === 'fresh'
+                  ? 'Fresh thread'
+                  : `${modelSwitchPreview.turnCount} turn${modelSwitchPreview.turnCount === 1 ? '' : 's'} context`}
+              </span>
+              <span className={`composer-switch-banner__chip${modelSwitchPreview.willCompact ? ' composer-switch-banner__chip--accent' : ''}`}>
+                {modelSwitchCompactLabel}
+              </span>
+            </div>
+          </div>
+        )}
+
         <textarea
           ref={textareaRef}
           className="bottom-bar-textarea"
@@ -492,117 +543,107 @@ function ComposerImpl({
           placeholder={placeholder}
           disabled={disabled}
           rows={1}
-          title="Enter 发送 · Shift+Enter 换行"
+          title={t('composer.enterToSend')}
         />
         {inputText.length > 500 && <span className="char-count">{inputText.length}</span>}
 
-        <div className="bottom-bar-actions">
-          <button
-            className={`bottom-bar-send${canSubmitInput ? ' bottom-bar-send--active' : ''}`}
-            onClick={() => { void handleSubmit(); }}
-            disabled={!canSubmitInput || disabled}
-            title={isProcessing ? 'Send follow-up' : 'Send'}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-          {isProcessing && onInterrupt && (
+        <div className="bottom-bar-footer">
+          <div className="bottom-bar-footer-tools">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,text/*,.txt,.md,.json,.csv,.xml,.yaml,.yml,.js,.ts,.jsx,.tsx,.py,.go,.rs,.java,.c,.cpp,.h,.css,.html,.pdf"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handleFileSelect}
+            />
             <button
-              className="bottom-bar-send bottom-bar-send--stop"
-              onClick={() => { void onInterrupt(); }}
-              title="Stop"
+              className="bb-icon-btn"
+              onClick={() => fileInputRef.current?.click()}
+              title={t('composer.addFileOrImage')}
+              disabled={disabled}
             >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-                <rect x="2" y="2" width="10" height="10" rx="2" />
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13.5 9.5v3a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-3" />
+                <polyline points="10.5,5 8,2.5 5.5,5" />
+                <line x1="8" y1="2.5" x2="8" y2="10.5" />
               </svg>
             </button>
-          )}
-        </div>
-      </div>
-
-      <div className="bottom-bar-controls">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*,text/*,.txt,.md,.json,.csv,.xml,.yaml,.yml,.js,.ts,.jsx,.tsx,.py,.go,.rs,.java,.c,.cpp,.h,.css,.html,.pdf"
-          multiple
-          style={{ display: 'none' }}
-          onChange={handleFileSelect}
-        />
-        <button
-          className="bb-icon-btn"
-          onClick={() => fileInputRef.current?.click()}
-          title="添加文件或图片"
-          disabled={disabled}
-        >
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M13.5 9.5v3a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-3" />
-            <polyline points="10.5,5 8,2.5 5.5,5" />
-            <line x1="8" y1="2.5" x2="8" y2="10.5" />
-          </svg>
-        </button>
-        <button
-          className="bb-icon-btn"
-          onClick={() => setDraftText('/')}
-          title="插入斜杠命令"
-          disabled={disabled}
-        >
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="10" y1="3" x2="6" y2="13" />
-          </svg>
-        </button>
-        {modelOptions.length > 0 && (
-          <CustomSelect
-            value={selectedModel}
-            options={modelOptions}
-            onChange={onSelectModel}
-            title="Model"
-          />
-        )}
-        <CustomSelect
-          value={reasoning}
-          options={reasoningOptions}
-          onChange={onSelectReasoning}
-          title="Reasoning"
-        />
-        <div className="bottom-bar-spacer" />
-        <span className="bottom-bar-label">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
-            <rect x="1" y="1" width="8" height="8" rx="1.5" />
-          </svg>
-          Codex
-        </span>
-        <CustomSelect
-          value={autonomyMode}
-          options={autonomyOptions}
-          onChange={onSelectAutonomyMode}
-          title="Permission mode"
-          compact
-        />
-        {isUpdatingAutonomy && <span className="bottom-bar-label">Saving mode...</span>}
-        {!isUpdatingAutonomy && autonomyDetail && <span className="bottom-bar-label">{autonomyDetail}</span>}
-        <span className="bottom-bar-label">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M5 1v3" />
-            <path d="M5 6v3" />
-            <path d="M2 7l3-3 3 3" />
-          </svg>
-          {branchLabel}
-        </span>
-        {contextUsage && (
-          <span className={`bottom-bar-label bottom-bar-context${contextUsage.percent < 20 ? ' bottom-bar-context--low' : ''}`}>
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <circle cx="5" cy="5" r="4" stroke="currentColor" strokeWidth="1.2" />
-              <path
-                d={`M5 5 L5 1 A4 4 0 ${contextUsage.percent > 50 ? 1 : 0} 1 ${5 + 4 * Math.sin(2 * Math.PI * (100 - contextUsage.percent) / 100)} ${5 - 4 * Math.cos(2 * Math.PI * (100 - contextUsage.percent) / 100)} Z`}
-                fill="currentColor"
-                opacity="0.4"
+            <button
+              className="bb-icon-btn"
+              onClick={() => setDraftText('/')}
+              title={t('composer.insertSlashCommand')}
+              disabled={disabled}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="10" y1="3" x2="6" y2="13" />
+              </svg>
+            </button>
+            <span className="bottom-bar-divider" />
+            {modelOptions.length > 0 && (
+              <CustomSelect
+                value={selectedModel}
+                options={modelOptions}
+                onChange={onSelectModel}
+                title={t('composer.model')}
               />
-            </svg>
-            {contextUsage.percent}% ctx
-          </span>
-        )}
+            )}
+            <CustomSelect
+              value={reasoning}
+              options={reasoningOptions}
+              onChange={onSelectReasoning}
+              title={t('composer.reasoning')}
+            />
+            {backendType !== 'claude' && (
+              <CustomSelect
+                value={autonomyMode}
+                options={autonomyOptions}
+                onChange={onSelectAutonomyMode}
+                title={t('composer.permissionMode')}
+                compact
+              />
+            )}
+            {isUpdatingAutonomy && backendType !== 'claude' && (
+              <span className="bottom-bar-label">{t('composer.saving')}</span>
+            )}
+          </div>
+          <div className="bottom-bar-footer-right">
+            <span className="bottom-bar-label">
+              <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 1v3" /><path d="M5 6v3" /><path d="M2 7l3-3 3 3" />
+              </svg>
+              {branchLabel}
+            </span>
+            {contextUsage && (
+              <span className={`bottom-bar-label bottom-bar-context${contextUsage.percent < 20 ? ' bottom-bar-context--low' : ''}`}>
+                {contextUsage.percent}%
+              </span>
+            )}
+            <div className="bottom-bar-actions">
+              <button
+                className={`bottom-bar-send${canSubmitInput ? ' bottom-bar-send--active' : ''}`}
+                onClick={() => { void handleSubmit(); }}
+                disabled={!canSubmitInput || disabled}
+                title={isProcessing ? t('composer.sendFollowUp') : t('common.send')}
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              {isProcessing && onInterrupt && (
+                <button
+                  className="bottom-bar-send bottom-bar-send--stop"
+                  onClick={() => { void onInterrupt(); }}
+                  title={t('common.stop')}
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                    <rect x="2" y="2" width="10" height="10" rx="2" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

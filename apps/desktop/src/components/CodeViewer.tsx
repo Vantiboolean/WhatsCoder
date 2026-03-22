@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import hljs from 'highlight.js';
 import { invoke } from '@tauri-apps/api/core';
+import { useTranslation } from 'react-i18next';
 
 export type OverlayView = {
   type: 'diff' | 'file';
@@ -94,6 +95,7 @@ export function CodeViewer({
   onClose: () => void;
   extraToolbarRight?: React.ReactNode;
 }) {
+  const { t } = useTranslation();
   const lang = overlay.language ?? getLanguageFromPath(overlay.title);
   const canEdit = overlay.type === 'file' && Boolean(overlay.path);
 
@@ -141,7 +143,7 @@ export function CodeViewer({
     <div className="cv-container">
       <div className="cv-toolbar" data-tauri-drag-region>
         <div className="cv-toolbar-left">
-          <button className="cv-back-btn" onClick={onClose} title="Back to chat">
+          <button className="cv-back-btn" onClick={onClose} title={t('codeViewer.backToChat')}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M10 3L5 8l5 5" />
             </svg>
@@ -153,35 +155,35 @@ export function CodeViewer({
         </div>
         <div className="cv-toolbar-center">
           {saveState === 'error' && (
-            <span className="cv-save-error" title={saveError}>保存失败</span>
+            <span className="cv-save-error" title={saveError}>{t('codeViewer.saveFailed')}</span>
           )}
         </div>
         <div className="cv-toolbar-right">
           {canEdit && !isEditing && (
-            <button className="cv-edit-btn" onClick={handleEdit} title="Edit file">
+            <button className="cv-edit-btn" onClick={handleEdit} title={t('codeViewer.editFile')}>
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M11.5 2.5a1.414 1.414 0 012 2L5 13H2v-3L11.5 2.5z" />
               </svg>
-              <span>编辑</span>
+              <span>{t('codeViewer.editFile')}</span>
             </button>
           )}
           {isEditing && (
             <>
-              <button className="cv-save-btn" onClick={handleSave} disabled={saveState === 'saving'} title="Save file">
+              <button className="cv-save-btn" onClick={handleSave} disabled={saveState === 'saving'} title={t('codeViewer.saveFile')}>
                 {saveState === 'saving' ? (
-                  <span>保存中…</span>
+                  <span>{t('codeViewer.savingFile')}</span>
                 ) : (
                   <>
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M13 11v2.5A1.5 1.5 0 0111.5 15h-7A1.5 1.5 0 013 13.5V11" />
                       <path d="M8 1v8M5 6l3 3 3-3" />
                     </svg>
-                    <span>保存</span>
+                    <span>{t('codeViewer.saveFile')}</span>
                   </>
                 )}
               </button>
-              <button className="cv-cancel-btn" onClick={handleCancel} title="Cancel editing">
-                <span>取消</span>
+              <button className="cv-cancel-btn" onClick={handleCancel} title={t('codeViewer.cancelEditing')}>
+                <span>{t('codeViewer.cancelEditing')}</span>
               </button>
             </>
           )}

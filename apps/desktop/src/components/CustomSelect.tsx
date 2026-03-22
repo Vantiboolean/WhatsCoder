@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 
-type Option = {
+export type SelectOption = {
   value: string;
   label: string;
+  group?: string;
 };
 
 type Props = {
   value: string;
-  options: Option[];
+  options: SelectOption[];
   onChange: (value: string) => void;
   title?: string;
   compact?: boolean;
@@ -33,6 +34,8 @@ export function CustomSelect({ value, options, onChange, title, compact }: Props
     return () => document.removeEventListener('mousedown', close);
   }, [open]);
 
+  let lastGroup: string | undefined;
+
   return (
     <div className={`csel${compact ? ' csel--compact' : ''}${open ? ' csel--open' : ''}`} ref={ref} title={title}>
       <button className="csel-trigger" onClick={() => setOpen(!open)}>
@@ -43,23 +46,31 @@ export function CustomSelect({ value, options, onChange, title, compact }: Props
       </button>
       {open && (
         <div className="csel-menu">
-          {options.map((option) => (
-            <button
-              key={option.value}
-              className={`csel-option${option.value === value ? ' csel-option--active' : ''}`}
-              onClick={() => {
-                onChange(option.value);
-                setOpen(false);
-              }}
-            >
-              {option.label}
-              {option.value === value && (
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2.5 6l2.5 2.5 4.5-5" />
-                </svg>
-              )}
-            </button>
-          ))}
+          {options.map((option) => {
+            const showGroupHeader = option.group && option.group !== lastGroup;
+            lastGroup = option.group;
+            return (
+              <div key={option.value}>
+                {showGroupHeader && (
+                  <div className="csel-group-header">{option.group}</div>
+                )}
+                <button
+                  className={`csel-option${option.value === value ? ' csel-option--active' : ''}`}
+                  onClick={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                >
+                  {option.label}
+                  {option.value === value && (
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M2.5 6l2.5 2.5 4.5-5" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

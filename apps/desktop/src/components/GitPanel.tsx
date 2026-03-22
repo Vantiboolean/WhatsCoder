@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import type { OverlayView } from './CodeViewer';
 
@@ -80,6 +81,7 @@ export function GitPanel({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetchingStatusRef = useRef(false);
   const fetchingLogRef = useRef(false);
+  const { t } = useTranslation();
 
   const fetchStatus = useCallback(async () => {
     if (!cwd || fetchingStatusRef.current) return;
@@ -180,7 +182,7 @@ export function GitPanel({
           <line x1="12" y1="1" x2="12" y2="9" />
           <line x1="12" y1="15" x2="12" y2="23" />
         </svg>
-        <span>No project selected</span>
+        <span>{t('gitPanel.noProjectSelected')}</span>
       </div>
     );
   }
@@ -204,7 +206,7 @@ export function GitPanel({
           className={`gp-section-tab${activeSection === 'changes' ? ' gp-section-tab--active' : ''}`}
           onClick={() => setActiveSection('changes')}
         >
-          Changes
+          {t('gitPanel.changes')}
           {status && (status.staged.length + status.unstaged.length > 0) && (
             <span className="gp-badge">{status.staged.length + status.unstaged.length}</span>
           )}
@@ -213,7 +215,7 @@ export function GitPanel({
           className={`gp-section-tab${activeSection === 'history' ? ' gp-section-tab--active' : ''}`}
           onClick={() => { setActiveSection('history'); fetchLog(); }}
         >
-          History
+          {t('gitPanel.historyTab')}
         </button>
       </div>
 
@@ -224,7 +226,7 @@ export function GitPanel({
           {status.staged.length > 0 && (
             <div className="gp-file-section">
               <div className="gp-file-section-header">
-                <span>Staged Changes</span>
+                <span>{t('gitPanel.stagedChanges')}</span>
                 <span className="gp-count">{status.staged.length}</span>
               </div>
               {status.staged.map((f) => (
@@ -235,7 +237,7 @@ export function GitPanel({
                   <div className="gp-file-actions">
                     {f.additions > 0 && <span className="gp-stat-add">+{f.additions}</span>}
                     {f.deletions > 0 && <span className="gp-stat-del">-{f.deletions}</span>}
-                    <button className="gp-action-btn" onClick={(e) => { e.stopPropagation(); handleUnstage(f.path); }} title="Unstage">
+                    <button className="gp-action-btn" onClick={(e) => { e.stopPropagation(); handleUnstage(f.path); }} title={t('gitPanel.unstage')}>
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="3" y1="6" x2="9" y2="6" /></svg>
                     </button>
                   </div>
@@ -247,7 +249,7 @@ export function GitPanel({
           {status.unstaged.length > 0 && (
             <div className="gp-file-section">
               <div className="gp-file-section-header">
-                <span>Unstaged Changes</span>
+                <span>{t('gitPanel.unstagedChanges')}</span>
                 <span className="gp-count">{status.unstaged.length}</span>
               </div>
               {status.unstaged.map((f) => (
@@ -258,7 +260,7 @@ export function GitPanel({
                   <div className="gp-file-actions">
                     {f.additions > 0 && <span className="gp-stat-add">+{f.additions}</span>}
                     {f.deletions > 0 && <span className="gp-stat-del">-{f.deletions}</span>}
-                    <button className="gp-action-btn" onClick={(e) => { e.stopPropagation(); handleStage(f.path); }} title="Stage">
+                    <button className="gp-action-btn" onClick={(e) => { e.stopPropagation(); handleStage(f.path); }} title={t('gitPanel.stage')}>
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="6" y1="3" x2="6" y2="9" /><line x1="3" y1="6" x2="9" y2="6" /></svg>
                     </button>
                   </div>
@@ -272,7 +274,7 @@ export function GitPanel({
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="var(--text-tertiary)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="5,10 8,13 15,6" />
               </svg>
-              <span>Working tree clean</span>
+              <span>{t('gitPanel.workingTreeClean')}</span>
             </div>
           )}
 
@@ -282,7 +284,7 @@ export function GitPanel({
                 className="gp-commit-input"
                 value={commitMsg}
                 onChange={(e) => setCommitMsg(e.target.value)}
-                placeholder="Commit message..."
+                placeholder={t('gitPanel.commitMessage')}
                 rows={3}
                 onKeyDown={(e) => {
                   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -295,7 +297,7 @@ export function GitPanel({
                 onClick={handleCommit}
                 disabled={!commitMsg.trim() || isCommitting}
               >
-                {isCommitting ? 'Committing...' : `Commit (${status.staged.length} file${status.staged.length > 1 ? 's' : ''})`}
+                {isCommitting ? t('gitPanel.committing') : t('gitPanel.commitFiles', { count: status.staged.length })}
               </button>
             </div>
           )}
@@ -306,7 +308,7 @@ export function GitPanel({
         <div className="gp-history">
           {log.length === 0 ? (
             <div className="gp-empty-changes">
-              <span>No commits yet</span>
+              <span>{t('gitPanel.noCommitsYet')}</span>
             </div>
           ) : (
             log.map((entry) => (

@@ -1,9 +1,12 @@
 import { Component, type ErrorInfo, type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { TFunction } from 'i18next';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
-import type { ThreadDetail, ThreadItem } from '@codex-mobile/shared';
+import type { ThreadDetail, ThreadItem, Turn } from '@codex-mobile/shared';
+import { summarizeDesktopDynamicTool } from '../lib/dynamicTools';
 
 const PAGE_SIZE = 50;
 const INITIAL_PAGES = 2;
@@ -32,16 +35,93 @@ type Props = {
   thread: ThreadDetail;
   isSending?: boolean;
   isAgentActive?: boolean;
+  isTurnsLoading?: boolean;
+  hideHeader?: boolean;
   showRawJson?: boolean;
   onToggleRawJson?: () => void;
   overrideIsProcessing?: boolean;
+  onResend?: (text: string) => void;
 };
 
 type ThreadListItem = {
+  key: string;
   item: ThreadItem;
 };
 
-export const ThreadView = memo(function ThreadView({ thread, isSending, isAgentActive, showRawJson, onToggleRawJson, overrideIsProcessing }: Props) {
+function createTurnErrorItem(turn: Turn): ThreadListItem | null {
+  if (!turn.error?.message) {
+    return null;
+  }
+
+  const parts: string[] = [turn.error.message];
+  if (turn.error.additionalDetails) {
+    parts.push(turn.error.additionalDetails);
+  }
+  if (turn.error.codexErrorInfo && Object.keys(turn.error.codexErrorInfo).length > 0) {
+    parts.push(JSON.stringify(turn.error.codexErrorInfo, null, 2));
+  }
+
+  return {
+    key: `${turn.id}-error`,
+    item: {
+      type: '_turnError',
+      id: `${turn.id}-error`,
+      text: parts.join('\n\n'),
+    },
+  };
+}
+
+function collectVisibleThreadItems(turns: Turn[] | undefined, maxVisible: number): {
+  totalCount: number;
+  items: ThreadListItem[];
+} {
+  if (!turns?.length) {
+    return { totalCount: 0, items: [] };
+  }
+
+  let totalCount = 0;
+  const items: ThreadListItem[] = [];
+
+  for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex--) {
+    const turn = turns[turnIndex];
+    const turnItems = turn.items ?? [];
+    const turnErrorItem = createTurnErrorItem(turn);
+
+    totalCount += turnItems.length;
+    if (turnErrorItem) {
+      totalCount += 1;
+    }
+
+    if (items.length >= maxVisible) {
+      continue;
+    }
+
+    if (turnErrorItem && items.length < maxVisible) {
+      items.push(turnErrorItem);
+    }
+
+    for (let itemIndex = turnItems.length - 1; itemIndex >= 0 && items.length < maxVisible; itemIndex--) {
+      const item = turnItems[itemIndex];
+      items.push({ key: item.id, item });
+    }
+  }
+
+  items.reverse();
+  return { totalCount, items };
+}
+
+export const ThreadView = memo(function ThreadView({
+  thread,
+  isSending,
+  isAgentActive,
+  isTurnsLoading,
+  hideHeader,
+  showRawJson,
+  onToggleRawJson,
+  overrideIsProcessing,
+  onResend,
+}: Props) {
+  const { t } = useTranslation();
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const [visiblePages, setVisiblePages] = useState(INITIAL_PAGES);
@@ -58,35 +138,12 @@ export const ThreadView = memo(function ThreadView({ thread, isSending, isAgentA
     }
   }, [thread.id]);
 
-  const allItems = useMemo(() => {
-    const items: ThreadListItem[] = [];
-    for (const turn of thread.turns ?? []) {
-      for (const item of turn.items ?? []) {
-        items.push({ item });
-      }
-      if (turn.error?.message) {
-        const parts: string[] = [turn.error.message];
-        if (turn.error.additionalDetails) {
-          parts.push(turn.error.additionalDetails);
-        }
-        if (turn.error.codexErrorInfo && Object.keys(turn.error.codexErrorInfo).length > 0) {
-          parts.push(JSON.stringify(turn.error.codexErrorInfo, null, 2));
-        }
-        items.push({
-          item: {
-            type: '_turnError',
-            id: `${turn.id}-error`,
-            text: parts.join('\n\n'),
-          },
-        });
-      }
-    }
-    return items;
-  }, [thread.turns]);
-
   const maxVisible = visiblePages * PAGE_SIZE;
-  const hiddenCount = Math.max(0, allItems.length - maxVisible);
-  const visibleItems = hiddenCount > 0 ? allItems.slice(hiddenCount) : allItems;
+  const { totalCount: totalItemCount, items: visibleItems } = useMemo(
+    () => collectVisibleThreadItems(thread.turns, maxVisible),
+    [thread.turns, maxVisible],
+  );
+  const hiddenCount = Math.max(0, totalItemCount - visibleItems.length);
 
   const handleLoadMore = useCallback(() => {
     const container = messagesRef.current;
@@ -141,27 +198,23 @@ export const ThreadView = memo(function ThreadView({ thread, isSending, isAgentA
 
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     setShowScrollBtn(false);
-  }, [allItems.length, isProcessing]);
+  }, [totalItemCount, isProcessing]);
 
   return (
     <div className="tv-container">
-      <div className="tv-header">
-        <div className="tv-header-left">
-          <div className="tv-title">{thread.name || thread.preview || 'Untitled Thread'}</div>
-          <div className="tv-meta">
-            {thread.turns?.length ?? 0} turns · {allItems.length} items ·{' '}
-            {new Date((thread.updatedAt ?? thread.createdAt) * 1000).toLocaleString()}
-            {isProcessing && <span className="tv-processing">Processing...</span>}
+      {!hideHeader && (
+        <div className="tv-header">
+          <div className="tv-header-left">
+            <div className="tv-title">{thread.name || thread.preview || t('thread.untitledThread')}</div>
+            <div className="tv-meta">
+              {t('thread.metaSummary', { turns: thread.turns?.length ?? 0, items: totalItemCount })} ·{' '}
+              {new Date((thread.updatedAt ?? thread.createdAt) * 1000).toLocaleString()}
+              {isProcessing && <span className="tv-processing">{t('thread.processing')}</span>}
+              {!isProcessing && isTurnsLoading && <span className="tv-processing">{t('thread.loadingMessages')}</span>}
+            </div>
           </div>
         </div>
-        {onToggleRawJson && (
-          <div className="tv-header-actions">
-            <button className="btn-small" onClick={onToggleRawJson}>
-              {showRawJson ? 'Chat View' : 'Raw JSON'}
-            </button>
-          </div>
-        )}
-      </div>
+      )}
 
       {showRawJson ? (
         <pre
@@ -185,13 +238,28 @@ export const ThreadView = memo(function ThreadView({ thread, isSending, isAgentA
         <div className="tv-messages" ref={messagesRef}>
           {hiddenCount > 0 && (
             <button className="tv-load-more" onClick={handleLoadMore}>
-              Load {Math.min(PAGE_SIZE, hiddenCount)} earlier messages ({hiddenCount} hidden)
+              {t('thread.loadEarlierMessages', { count: Math.min(PAGE_SIZE, hiddenCount), hidden: hiddenCount })}
             </button>
           )}
           {visibleItems.length === 0 ? (
-            <div className="tv-empty">No messages in this thread yet. Send a message to start.</div>
+            isTurnsLoading ? (
+              <>
+                {[1, 2, 3].map((row) => (
+                  <div key={row} className="skeleton-row">
+                    <div className="skeleton-avatar" />
+                    <div className="skeleton-block" style={{ flex: 1 }}>
+                      <div className={`skeleton-line skeleton-line--${row === 1 ? 'long' : row === 2 ? 'medium' : 'short'}`} />
+                      <div className="skeleton-line skeleton-line--long" />
+                      <div className="skeleton-line skeleton-line--medium" />
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <div className="tv-empty">{t('thread.noMessages')}</div>
+            )
           ) : (
-            visibleItems.map(({ item }) => <ItemRenderer key={item.id} item={item} />)
+            visibleItems.map(({ key, item }) => <ItemRenderer key={key} item={item} onResend={onResend} />)
           )}
           {isProcessing && (
             <div className="tv-agent-row">
@@ -214,12 +282,13 @@ export const ThreadView = memo(function ThreadView({ thread, isSending, isAgentA
               container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
             }
           }}
-          title="Scroll to bottom"
+          title={t('thread.scrollToBottom')}
         >
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <line x1="7" y1="2" x2="7" y2="12" />
             <polyline points="3,8 7,12 11,8" />
           </svg>
+          {t('thread.jumpToBottom')}
         </button>
       )}
     </div>
@@ -227,6 +296,7 @@ export const ThreadView = memo(function ThreadView({ thread, isSending, isAgentA
 });
 
 function CopyableCode({ children, className }: { children: ReactNode; className?: string }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const codeRef = useRef<HTMLElement>(null);
 
@@ -245,13 +315,24 @@ function CopyableCode({ children, className }: { children: ReactNode; className?
     return <code className="tv-md-inline-code">{children}</code>;
   }
 
+  const lang = className.replace('language-', '').split(' ')[0];
+
   return (
-    <code ref={codeRef} className={`tv-md-code ${className}`}>
-      {children}
-      <button className={`tv-code-copy${copied ? ' tv-code-copy--done' : ''}`} onClick={handleCopy} title="Copy code">
-        {copied ? 'Done' : 'Copy'}
-      </button>
-    </code>
+    <>
+      <div className="tv-code-header">
+        {lang && <span className="tv-code-lang">{lang}</span>}
+        <button className={`tv-code-copy${copied ? ' tv-code-copy--done' : ''}`} onClick={handleCopy} title={t('thread.copyCode')}>
+          {copied ? (
+            <><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="2,6 5,9 10,3" /></svg> {t('common.copied')}</>
+          ) : (
+            <><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.5" /><path d="M8 4V2.5A1.5 1.5 0 0 0 6.5 1h-4A1.5 1.5 0 0 0 1 2.5v4A1.5 1.5 0 0 0 2.5 8H4" /></svg> {t('common.copy')}</>
+          )}
+        </button>
+      </div>
+      <code ref={codeRef} className={`tv-md-code ${className}`}>
+        {children}
+      </code>
+    </>
   );
 }
 
@@ -352,7 +433,7 @@ function toReasoningContent(item: ThreadItem): string[] {
   return item.content.filter((entry): entry is string => typeof entry === 'string');
 }
 
-function renderToolResult(item: ThreadItem): ReactNode {
+function renderToolResult(item: ThreadItem, t: TFunction): ReactNode {
   const hasImages = item.contentItems?.some((e) => e.imageUrl);
 
   if (hasImages) {
@@ -365,7 +446,7 @@ function renderToolResult(item: ThreadItem): ReactNode {
           textParts.length = 0;
         }
         nodes.push(
-          <img key={`img-${nodes.length}`} src={entry.imageUrl} alt="Tool result" style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 4, display: 'block', marginBottom: 4 }} />
+          <img key={`img-${nodes.length}`} src={entry.imageUrl} alt={t('thread.toolResult')} style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 4, display: 'block', marginBottom: 4 }} />
         );
       } else if (entry.text) {
         textParts.push(entry.text);
@@ -444,10 +525,11 @@ function renderWebSearchAction(item: ThreadItem): string | null {
   }
 }
 
-const ItemRenderer = memo(function ItemRenderer({ item }: { item: ThreadItem }) {
+const ItemRenderer = memo(function ItemRenderer({ item, onResend }: { item: ThreadItem; onResend?: (text: string) => void }) {
+  const { t } = useTranslation();
   switch (item.type) {
     case 'userMessage':
-      return <UserMessage item={item} />;
+      return <UserMessage item={item} onResend={onResend} />;
     case 'agentMessage':
       return <AgentMessage item={item} />;
     case 'commandExecution':
@@ -459,11 +541,19 @@ const ItemRenderer = memo(function ItemRenderer({ item }: { item: ThreadItem }) 
     case 'plan':
       return <PlanItem item={item} />;
     case 'contextCompaction':
-      return <SystemInfo label="Context compacted" />;
+      return <SystemInfo label={t('thread.contextCompacted')} />;
     case 'enteredReviewMode':
-      return <SystemInfo label={item.review ? `Entered review mode · ${item.review}` : 'Entered review mode'} />;
+      return (
+        <SystemInfo
+          label={item.review ? `${t('thread.enteredReviewMode')} · ${item.review}` : t('thread.enteredReviewMode')}
+        />
+      );
     case 'exitedReviewMode':
-      return <SystemInfo label={item.review ? `Exited review mode · ${item.review}` : 'Exited review mode'} />;
+      return (
+        <SystemInfo
+          label={item.review ? `${t('thread.exitedReviewMode')} · ${item.review}` : t('thread.exitedReviewMode')}
+        />
+      );
     case 'mcpToolCall':
     case 'dynamicToolCall':
     case 'hook':
@@ -479,22 +569,62 @@ const ItemRenderer = memo(function ItemRenderer({ item }: { item: ThreadItem }) 
     case 'imageGeneration':
       return <ImageGenerationItem item={item} />;
     case '_turnError':
-      return <TurnError message={item.text ?? 'Unknown error'} />;
+      return <TurnError message={item.text ?? t('thread.unknownError')} />;
     default:
       return <UnknownItem item={item} />;
   }
 });
 
-const UserMessage = memo(function UserMessage({ item }: { item: ThreadItem }) {
+const UserMessage = memo(function UserMessage({ item, onResend }: { item: ThreadItem; onResend?: (text: string) => void }) {
+  const { t } = useTranslation();
   const text = extractContentText(item.content);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  };
+
+  const handleEdit = () => {
+    if (onResend) {
+      onResend(text);
+    }
+  };
+
   if (!text) {
     return null;
   }
 
   return (
     <div className="tv-user-row">
-      <div className="tv-user-bubble">
-        <Markdown>{text}</Markdown>
+      <div className="tv-user-wrap">
+        <div className="tv-user-bubble">
+          <Markdown>{text}</Markdown>
+        </div>
+        <div className="tv-user-actions">
+          <button
+            className={`tv-user-action-btn${copied ? ' tv-user-action-btn--done' : ''}`}
+            onClick={handleCopy}
+            title={copied ? t('common.copied') : t('common.copy')}
+          >
+            {copied ? (
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="2,6 5,9 10,3" /></svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.5" /><path d="M8 4V2.5A1.5 1.5 0 0 0 6.5 1h-4A1.5 1.5 0 0 0 1 2.5v4A1.5 1.5 0 0 0 2.5 8H4" /></svg>
+            )}
+            <span>{copied ? t('common.copied') : t('common.copy')}</span>
+          </button>
+          {onResend && (
+            <button className="tv-user-action-btn" onClick={handleEdit} title={t('thread.editAndResend')}>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8.5 1.5a1.414 1.414 0 0 1 2 2L3.5 10.5l-3 .5.5-3z" />
+              </svg>
+              <span>{t('common.edit')}</span>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -503,6 +633,7 @@ const UserMessage = memo(function UserMessage({ item }: { item: ThreadItem }) {
 const MAX_AGENT_LINES = 60;
 
 const AgentMessage = memo(function AgentMessage({ item }: { item: ThreadItem }) {
+  const { t } = useTranslation();
   const text = extractText(item);
   const [expanded, setExpanded] = useState(false);
   if (!text) {
@@ -516,28 +647,10 @@ const AgentMessage = memo(function AgentMessage({ item }: { item: ThreadItem }) 
   return (
     <div className="tv-agent-row">
       <div className="tv-agent-bubble tv-markdown-body">
-        {item.phase && (
-          <div style={{ marginBottom: 8 }}>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                padding: '2px 8px',
-                borderRadius: 999,
-                fontSize: 11,
-                color: 'var(--text-secondary)',
-                background: 'var(--bg-tertiary)',
-                border: '1px solid var(--border-subtle)',
-              }}
-            >
-              {item.phase === 'commentary' ? 'Commentary' : item.phase === 'final_answer' ? 'Final' : item.phase}
-            </span>
-          </div>
-        )}
         <Markdown>{displayText}</Markdown>
         {isTruncated && (
           <button className="tv-expand-btn" onClick={() => setExpanded(true)}>
-            展开全部 ({lines.length} 行)
+            {t('thread.expandAll', { count: lines.length })}
           </button>
         )}
       </div>
@@ -546,6 +659,7 @@ const AgentMessage = memo(function AgentMessage({ item }: { item: ThreadItem }) 
 });
 
 const Reasoning = memo(function Reasoning({ item }: { item: ThreadItem }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const summaries = toSummaryList(item.summary);
   const content = toReasoningContent(item);
@@ -569,7 +683,7 @@ const Reasoning = memo(function Reasoning({ item }: { item: ThreadItem }) {
         >
           <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <span className="tv-reasoning-label">Thinking</span>
+        <span className="tv-reasoning-label">{t('thread.thinking')}</span>
         {!open && <span className="tv-reasoning-preview">{preview}</span>}
       </button>
       {open && (
@@ -581,7 +695,7 @@ const Reasoning = memo(function Reasoning({ item }: { item: ThreadItem }) {
           )}
           {content.length > 0 && (
             <details className="tv-cmd-output" open={summaries.length === 0}>
-              <summary className="tv-cmd-output-summary">Raw reasoning</summary>
+              <summary className="tv-cmd-output-summary">{t('thread.rawReasoning')}</summary>
               <pre className="tv-cmd-output-pre">{content.join('\n\n')}</pre>
             </details>
           )}
@@ -592,11 +706,12 @@ const Reasoning = memo(function Reasoning({ item }: { item: ThreadItem }) {
 });
 
 function TruncatedOutput({ text }: { text: string }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const lines = text.split('\n');
   const truncated = lines.length > MAX_OUTPUT_LINES && !expanded;
   const displayText = truncated
-    ? [...lines.slice(0, 20), `\n... ${lines.length - 40} lines hidden ...\n`, ...lines.slice(-20)].join('\n')
+    ? [...lines.slice(0, 20), `\n${t('thread.linesHidden', { count: lines.length - 40 })}\n`, ...lines.slice(-20)].join('\n')
     : text;
 
   return (
@@ -604,7 +719,7 @@ function TruncatedOutput({ text }: { text: string }) {
       <pre className="tv-cmd-output-pre">{displayText}</pre>
       {truncated && (
         <button className="tv-cmd-expand" onClick={() => setExpanded(true)}>
-          Show all {lines.length} lines
+          {t('thread.showAllLines', { count: lines.length })}
         </button>
       )}
     </>
@@ -612,28 +727,31 @@ function TruncatedOutput({ text }: { text: string }) {
 }
 
 const CommandExecution = memo(function CommandExecution({ item }: { item: ThreadItem }) {
+  const { t } = useTranslation();
   const command = Array.isArray(item.command) ? item.command.join(' ') : String(item.command ?? '');
   const failed = item.exitCode != null && item.exitCode !== 0 || item.status === 'failed' || item.status === 'declined';
   const running = item.status === 'inProgress' || item.status === 'running';
+  const badge = statusBadge(t, item.status);
 
   return (
-    <div className={`tv-cmd${failed ? ' tv-cmd--failed' : ''}`}>
+    <div className={`tv-cmd${failed ? ' tv-cmd--failed' : ''}${running ? ' tv-tool--running' : ''}`}>
       <div className="tv-cmd-header">
         {running ? <span className="tv-cmd-spinner" /> : <span className="tv-cmd-prompt">$</span>}
-        <code className="tv-cmd-text">{command || 'Command execution'}</code>
-        {item.status && (
-          <span className={`tv-cmd-exit ${failed ? 'tv-cmd-exit--fail' : 'tv-cmd-exit--ok'}`}>{item.status}</span>
-        )}
+        <code className="tv-cmd-text">{command || t('thread.commandExecution')}</code>
+        {badge && <span className={`tv-tool-status ${badge.className}`}>{badge.label}</span>}
+        {item.exitCode != null && <span className={`tv-cmd-exit ${item.exitCode === 0 ? 'tv-cmd-exit--ok' : 'tv-cmd-exit--fail'}`}>exit {item.exitCode}</span>}
         {item.durationMs != null && <span className="tv-cmd-duration">{(item.durationMs / 1000).toFixed(1)}s</span>}
       </div>
       {item.aggregatedOutput ? (
         <details className="tv-cmd-output" open={failed || running}>
-          <summary className="tv-cmd-output-summary">Output ({item.aggregatedOutput.split('\n').length} lines)</summary>
+          <summary className="tv-cmd-output-summary">
+            {t('thread.output', { count: item.aggregatedOutput.split('\n').length })}
+          </summary>
           <TruncatedOutput text={item.aggregatedOutput} />
         </details>
       ) : running ? (
         <div className="tv-cmd-output" style={{ padding: '4px 12px', color: 'var(--text-tertiary)', fontSize: 12 }}>
-          Running...
+          {t('thread.running')}
         </div>
       ) : null}
     </div>
@@ -696,6 +814,7 @@ const DiffView = memo(function DiffView({ diff }: { diff: string }) {
 });
 
 const FileChange = memo(function FileChange({ item }: { item: ThreadItem }) {
+  const { t } = useTranslation();
   const changes = item.changes ?? [];
   const additions = changes.reduce(
     (sum, change) => sum + (change.diff?.split('\n').filter((line) => line.startsWith('+')).length ?? 0),
@@ -710,7 +829,7 @@ const FileChange = memo(function FileChange({ item }: { item: ThreadItem }) {
     <div className="tv-file-change">
       <div className="tv-file-change-header">
         <span className="tv-cmd-prompt">+</span>
-        <span className="tv-file-change-count">{changes.length} file{changes.length !== 1 ? 's' : ''} changed</span>
+        <span className="tv-file-change-count">{t('thread.filesChanged', { count: changes.length })}</span>
         {additions > 0 && <span className="tv-file-stat tv-file-stat--add">+{additions}</span>}
         {deletions > 0 && <span className="tv-file-stat tv-file-stat--del">-{deletions}</span>}
         {item.status && <span className="tv-cmd-exit">{item.status}</span>}
@@ -730,7 +849,7 @@ const FileChange = memo(function FileChange({ item }: { item: ThreadItem }) {
       ))}
       {item.aggregatedOutput ? (
         <details className="tv-cmd-output">
-          <summary className="tv-cmd-output-summary">Live diff stream</summary>
+          <summary className="tv-cmd-output-summary">{t('thread.liveDiffStream')}</summary>
           <TruncatedOutput text={item.aggregatedOutput} />
         </details>
       ) : null}
@@ -739,6 +858,7 @@ const FileChange = memo(function FileChange({ item }: { item: ThreadItem }) {
 });
 
 const PlanItem = memo(function PlanItem({ item }: { item: ThreadItem }) {
+  const { t } = useTranslation();
   const text = extractText(item);
   if (!text) {
     return null;
@@ -748,7 +868,7 @@ const PlanItem = memo(function PlanItem({ item }: { item: ThreadItem }) {
     <div className="tv-cmd">
       <div className="tv-cmd-header">
         <span className="tv-cmd-prompt">#</span>
-        <code className="tv-cmd-text">Plan</code>
+        <code className="tv-cmd-text">{t('thread.plan')}</code>
       </div>
       <div className="tv-cmd-output" style={{ borderTop: '1px solid var(--border-subtle)', padding: '8px 12px' }}>
         <div className="tv-markdown-body">
@@ -759,55 +879,141 @@ const PlanItem = memo(function PlanItem({ item }: { item: ThreadItem }) {
   );
 });
 
+function toolCallIcon(type: string): { icon: string; color: string; className: string } {
+  switch (type) {
+    case 'mcpToolCall':     return { icon: '⚡', color: 'var(--accent-mcp, #a78bfa)',     className: 'tv-tool-icon--mcp' };
+    case 'hook':            return { icon: '⚙',  color: 'var(--accent-hook, #60a5fa)',    className: 'tv-tool-icon--hook' };
+    case 'collabAgentToolCall': return { icon: '🤝', color: 'var(--accent-collab, #34d399)', className: 'tv-tool-icon--collab' };
+    case 'dynamicToolCall': return { icon: '🔧', color: 'var(--accent-dynamic, #f59e0b)', className: 'tv-tool-icon--dynamic' };
+    case 'rawResponseItem': return { icon: '📋', color: 'var(--text-tertiary)',            className: 'tv-tool-icon--raw' };
+    default:                return { icon: '@',  color: 'var(--text-secondary)',           className: '' };
+  }
+}
+
+function toolCallLabel(item: ThreadItem): { primary: string; secondary: string | null } {
+  const summary = item.tool ? summarizeDesktopDynamicTool(item.tool, item.arguments) : null;
+
+  if (item.type === 'mcpToolCall') {
+    return { primary: item.tool ?? 'tool', secondary: item.server ?? 'mcp' };
+  }
+  if (item.type === 'hook') {
+    const eventName = (item.arguments as Record<string, unknown> | undefined)?.eventName;
+    return { primary: typeof eventName === 'string' ? eventName : item.tool ?? 'hook', secondary: 'hook' };
+  }
+  if (item.type === 'collabAgentToolCall') {
+    return { primary: item.tool ?? 'agent call', secondary: 'collab' };
+  }
+  if (item.type === 'dynamicToolCall') {
+    return {
+      primary: summary?.title ?? item.tool ?? 'dynamic tool',
+      secondary: summary?.subtitle ?? null,
+    };
+  }
+  if (item.type === 'rawResponseItem') {
+    return { primary: item.tool ?? 'response', secondary: null };
+  }
+  return { primary: item.tool ?? item.type, secondary: null };
+}
+
+function toolCallBadges(item: ThreadItem): string[] {
+  if (!item.tool) {
+    return [];
+  }
+
+  return summarizeDesktopDynamicTool(item.tool, item.arguments)?.badges ?? [];
+}
+
+function statusBadge(t: TFunction, status: string | undefined): { label: string; className: string } | null {
+  if (!status) return null;
+  switch (status) {
+    case 'completed':   return { label: t('thread.done'),            className: 'tv-status--ok' };
+    case 'inProgress':  return { label: t('thread.statusRunning'),   className: 'tv-status--active' };
+    case 'running':     return { label: t('thread.statusRunning'),   className: 'tv-status--active' };
+    case 'streaming':   return { label: t('thread.statusStreaming'), className: 'tv-status--active' };
+    case 'failed':      return { label: t('thread.failed'),          className: 'tv-status--fail' };
+    case 'declined':    return { label: t('thread.declined'),        className: 'tv-status--warn' };
+    case 'blocked':     return { label: t('thread.blocked'),         className: 'tv-status--warn' };
+    case 'stopped':     return { label: t('thread.stopped'),        className: 'tv-status--warn' };
+    default:            return { label: status,                      className: 'tv-status--default' };
+  }
+}
+
 const ToolCall = memo(function ToolCall({ item }: { item: ThreadItem }) {
-  const label =
-    item.type === 'mcpToolCall'
-      ? `${item.server ?? 'mcp'} / ${item.tool ?? 'tool'}`
-      : item.type === 'hook'
-      ? item.tool ?? 'hook'
-      : item.type === 'collabAgentToolCall'
-      ? item.tool ?? 'collab'
-      : item.type === 'rawResponseItem'
-      ? item.tool ?? 'raw response item'
-      : item.tool ?? item.type;
-  const resultNode = renderToolResult(item);
+  const { t } = useTranslation();
+  const { icon, color, className: iconClass } = toolCallIcon(item.type);
+  const { primary, secondary } = toolCallLabel(item);
+  const badges = toolCallBadges(item);
+  const badge = statusBadge(t, item.status);
+  const resultNode = renderToolResult(item, t);
   const argumentsText = stringifyJson(item.arguments);
+  const isRunning = item.status === 'inProgress' || item.status === 'running' || item.status === 'streaming';
+  const isFailed = item.status === 'failed' || item.success === false;
 
   return (
-    <div className="tv-cmd">
-      <div className="tv-cmd-header">
-        <span className="tv-cmd-prompt">@</span>
-        <code className="tv-cmd-text">{label}</code>
-        {item.status && <span className="tv-cmd-exit">{item.status}</span>}
-        {item.durationMs != null && <span className="tv-cmd-duration">{(item.durationMs / 1000).toFixed(1)}s</span>}
+    <div className={`tv-tool${isFailed ? ' tv-tool--failed' : ''}${isRunning ? ' tv-tool--running' : ''}`}>
+      <div className="tv-tool-header">
+        <span className={`tv-tool-icon ${iconClass}`} style={{ color }}>{icon}</span>
+        <div className="tv-tool-label">
+          <div className="tv-tool-text">
+            <code className="tv-tool-name">{primary}</code>
+            {secondary && <span className="tv-tool-subtitle" title={secondary}>{secondary}</span>}
+          </div>
+        </div>
+        <div className="tv-tool-meta">
+          {badge && <span className={`tv-tool-status ${badge.className}`}>{badge.label}</span>}
+          {item.durationMs != null && <span className="tv-tool-duration">{(item.durationMs / 1000).toFixed(1)}s</span>}
+        </div>
       </div>
-      {item.type === 'collabAgentToolCall' && (item.senderThreadId || (item.receiverThreadIds && item.receiverThreadIds.length > 0)) && (
-        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', padding: '2px 12px' }}>
-          {item.senderThreadId && <span>from: {item.senderThreadId}</span>}
-          {item.receiverThreadIds && item.receiverThreadIds.length > 0 && <span> → {item.receiverThreadIds.join(', ')}</span>}
+      {badges.length > 0 && (
+        <div className="tv-tool-badges">
+          {badges.map((entry) => (
+            <span key={entry} className="tv-tool-badge">{entry}</span>
+          ))}
         </div>
       )}
-      {argumentsText && (
-        <details className="tv-cmd-output">
-          <summary className="tv-cmd-output-summary">Arguments</summary>
+      {item.type === 'collabAgentToolCall' && (item.senderThreadId || (item.receiverThreadIds && item.receiverThreadIds.length > 0)) && (
+        <div className="tv-tool-collab-info">
+          {item.senderThreadId && <span>↗ from: <code>{item.senderThreadId}</code></span>}
+          {item.receiverThreadIds && item.receiverThreadIds.length > 0 && <span>↘ to: <code>{item.receiverThreadIds.join(', ')}</code></span>}
+        </div>
+      )}
+      {item.type === 'hook' && item.arguments != null && (() => {
+        const args = item.arguments as Record<string, unknown>;
+        const handlerType = typeof args.handlerType === 'string' ? args.handlerType : null;
+        const scope = typeof args.scope === 'string' ? args.scope : null;
+        const sourcePath = typeof args.sourcePath === 'string' ? args.sourcePath : null;
+        if (!handlerType && !scope && !sourcePath) return null;
+        return (
+          <div className="tv-tool-hook-info">
+            {handlerType && <span className="tv-tool-tag">{handlerType}</span>}
+            {scope && <span className="tv-tool-tag">{scope}</span>}
+            {sourcePath && <code className="tv-tool-path">{sourcePath}</code>}
+          </div>
+        );
+      })()}
+      {argumentsText && item.type !== 'hook' && (
+        <details className="tv-tool-section">
+          <summary className="tv-tool-section-header">{t('thread.arguments')}</summary>
           <pre className="tv-cmd-output-pre">{argumentsText}</pre>
         </details>
       )}
       {item.progressMessages && item.progressMessages.length > 0 && (
-        <details className="tv-cmd-output" open>
-          <summary className="tv-cmd-output-summary">Progress</summary>
+        <details className="tv-tool-section" open={isRunning}>
+          <summary className="tv-tool-section-header">
+            {isRunning ? t('thread.progress') : `${t('thread.progress')} (${item.progressMessages.length})`}
+          </summary>
           <pre className="tv-cmd-output-pre">{item.progressMessages.join('\n')}</pre>
         </details>
       )}
       {resultNode && (
-        <details className="tv-cmd-output" open={item.status === 'failed'}>
-          <summary className="tv-cmd-output-summary">{item.success === false ? 'Result (failed)' : 'Result'}</summary>
+        <details className="tv-tool-section" open={isFailed || isRunning}>
+          <summary className="tv-tool-section-header">{isFailed ? t('thread.resultFailed') : t('thread.result')}</summary>
           <div style={{ overflow: 'auto' }}>{resultNode}</div>
         </details>
       )}
       {item.error?.message && (
-        <div className="tv-error">
-          <span>!</span>
+        <div className="tv-tool-error">
+          <span className="tv-tool-error-icon">!</span>
           <span>{item.error.message}</span>
         </div>
       )}
@@ -816,6 +1022,7 @@ const ToolCall = memo(function ToolCall({ item }: { item: ThreadItem }) {
 });
 
 function RealtimeAudioItem({ item }: { item: ThreadItem }) {
+  const { t } = useTranslation();
   const meta = getStructuredContent(item);
   const totalChunks = typeof meta?.totalChunks === 'number' ? meta.totalChunks : null;
   const totalBytes = typeof meta?.totalBytes === 'number' ? meta.totalBytes : null;
@@ -836,7 +1043,7 @@ function RealtimeAudioItem({ item }: { item: ThreadItem }) {
     <div className="tv-cmd">
       <div className="tv-cmd-header">
         <span className="tv-cmd-prompt">~</span>
-        <code className="tv-cmd-text">Realtime audio</code>
+        <code className="tv-cmd-text">{t('thread.realtimeAudio')}</code>
         {item.status && <span className="tv-cmd-exit">{item.status}</span>}
       </div>
       <div className="tv-cmd-output" style={{ borderTop: '1px solid var(--border-subtle)', padding: '8px 12px' }}>
@@ -859,7 +1066,7 @@ function RealtimeAudioItem({ item }: { item: ThreadItem }) {
         )}
         {item.progressMessages && item.progressMessages.length > 0 && (
           <details className="tv-cmd-output" open>
-            <summary className="tv-cmd-output-summary">Chunks</summary>
+            <summary className="tv-cmd-output-summary">{t('thread.chunks')}</summary>
             <pre className="tv-cmd-output-pre">{item.progressMessages.join('\n')}</pre>
           </details>
         )}
@@ -869,36 +1076,53 @@ function RealtimeAudioItem({ item }: { item: ThreadItem }) {
 }
 
 function WebSearchItem({ item }: { item: ThreadItem }) {
+  const { t } = useTranslation();
   const detail = renderWebSearchAction(item);
+  const badge = statusBadge(t, item.status);
+  const actionType = item.action?.type;
+  const actionIcon = actionType === 'search' ? '🔍' : actionType === 'open_page' ? '🌐' : actionType === 'find_in_page' ? '📄' : '🔍';
 
   return (
-    <div className="tv-cmd">
-      <div className="tv-cmd-header">
-        <span className="tv-cmd-prompt">?</span>
-        <code className="tv-cmd-text">Web search</code>
-        {item.status && <span className="tv-cmd-exit">{item.status}</span>}
+    <div className="tv-tool">
+      <div className="tv-tool-header">
+        <span className="tv-tool-icon" style={{ color: 'var(--accent-blue, #60a5fa)' }}>{actionIcon}</span>
+        <div className="tv-tool-label">
+          <code className="tv-tool-name">
+            {actionType === 'search'
+              ? t('thread.webSearch')
+              : actionType === 'open_page'
+                ? t('thread.openPage')
+                : actionType === 'find_in_page'
+                  ? t('thread.findInPage')
+                  : t('thread.webSearch')}
+          </code>
+        </div>
+        <div className="tv-tool-meta">
+          {badge && <span className={`tv-tool-status ${badge.className}`}>{badge.label}</span>}
+        </div>
       </div>
-      <div className="tv-cmd-output" style={{ borderTop: '1px solid var(--border-subtle)', padding: '8px 12px' }}>
-        <div style={{ display: 'grid', gap: 6 }}>
-          <div>
-            <strong style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Query</strong>
+      <div style={{ borderTop: '1px solid var(--border-subtle)', padding: '8px 12px' }}>
+        {item.query && (
+          <div style={{ marginBottom: detail ? 8 : 0 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 2 }}>{t('thread.query')}</div>
             <div className="tv-markdown-body" style={{ fontSize: 13 }}>
-              <Markdown>{item.query ?? 'No query'}</Markdown>
+              <Markdown>{item.query}</Markdown>
             </div>
           </div>
-          {detail && (
-            <div>
-              <strong style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Action</strong>
-              <div style={{ color: 'var(--text-primary)', fontSize: 13 }}>{detail}</div>
-            </div>
-          )}
-        </div>
+        )}
+        {detail && (
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 2 }}>{t('thread.result')}</div>
+            <div style={{ color: 'var(--text-primary)', fontSize: 13, fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{detail}</div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 function ImageViewItem({ item }: { item: ThreadItem }) {
+  const { t } = useTranslation();
   return (
     <div className="tv-agent-row">
       <div className="tv-agent-bubble">
@@ -906,7 +1130,7 @@ function ImageViewItem({ item }: { item: ThreadItem }) {
           <>
             <img
               src={item.path}
-              alt="Image view"
+              alt={t('thread.imageViewAlt')}
               style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 8 }}
               onError={(event) => {
                 (event.target as HTMLImageElement).style.display = 'none';
@@ -915,7 +1139,7 @@ function ImageViewItem({ item }: { item: ThreadItem }) {
             <div style={{ marginTop: 8, color: 'var(--text-tertiary)', fontSize: 12 }}>{item.path}</div>
           </>
         ) : (
-          <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Image viewed</span>
+          <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>{t('thread.imageViewed')}</span>
         )}
       </div>
     </div>
@@ -923,17 +1147,18 @@ function ImageViewItem({ item }: { item: ThreadItem }) {
 }
 
 function ImageGenerationItem({ item }: { item: ThreadItem }) {
+  const { t } = useTranslation();
   return (
     <div className="tv-cmd">
       <div className="tv-cmd-header">
         <span className="tv-cmd-prompt">*</span>
-        <code className="tv-cmd-text">Image generation</code>
+        <code className="tv-cmd-text">{t('thread.imageGeneration')}</code>
         {item.status && <span className="tv-cmd-exit">{item.status}</span>}
       </div>
       <div className="tv-cmd-output" style={{ borderTop: '1px solid var(--border-subtle)', padding: '8px 12px' }}>
         {item.revisedPrompt && (
           <div style={{ marginBottom: 8 }}>
-            <strong style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Prompt</strong>
+            <strong style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{t('thread.prompt')}</strong>
             <div style={{ color: 'var(--text-primary)', fontSize: 13 }}>{item.revisedPrompt}</div>
           </div>
         )}
@@ -941,7 +1166,7 @@ function ImageGenerationItem({ item }: { item: ThreadItem }) {
           <>
             <img
               src={item.path}
-              alt={item.revisedPrompt ?? 'Generated image'}
+              alt={item.revisedPrompt ?? t('thread.generatedImage')}
               style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 8, display: 'block', marginBottom: 4 }}
               onError={(event) => { (event.target as HTMLImageElement).style.display = 'none'; }}
             />

@@ -1,10 +1,23 @@
-import { memo, useCallback, useRef } from 'react';
-import { GitPanel } from './GitPanel';
-import { FileExplorer } from './FileExplorer';
-import { PromptsPanel } from './PromptsPanel';
+import { lazy, memo, Suspense, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { OverlayView } from './CodeViewer';
 
 export type RightSidebarTab = 'git' | 'files' | 'prompts';
+
+const LazyGitPanel = lazy(async () => {
+  const module = await import('./GitPanel');
+  return { default: module.GitPanel };
+});
+
+const LazyFileExplorer = lazy(async () => {
+  const module = await import('./FileExplorer');
+  return { default: module.FileExplorer };
+});
+
+const LazyPromptsPanel = lazy(async () => {
+  const module = await import('./PromptsPanel');
+  return { default: module.PromptsPanel };
+});
 
 export const RightSidebar = memo(function RightSidebar({
   cwd,
@@ -23,6 +36,7 @@ export const RightSidebar = memo(function RightSidebar({
   width: number;
   onWidthChange: (w: number) => void;
 }) {
+  const { t } = useTranslation();
   const resizing = useRef(false);
   const resizeStartX = useRef(0);
   const resizeStartWidth = useRef(0);
@@ -53,7 +67,7 @@ export const RightSidebar = memo(function RightSidebar({
         <button
           className={`rs-tab${activeTab === 'git' ? ' rs-tab--active' : ''}`}
           onClick={() => onTabChange('git')}
-          title="Git"
+          title={t('rightSidebar.git')}
         >
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="5" cy="4" r="2" />
@@ -61,22 +75,22 @@ export const RightSidebar = memo(function RightSidebar({
             <circle cx="12" cy="6" r="2" />
             <path d="M5 6v4M10 6c-2 0-5 1-5 4" />
           </svg>
-          <span>Git</span>
+          <span>{t('rightSidebar.git')}</span>
         </button>
         <button
           className={`rs-tab${activeTab === 'files' ? ' rs-tab--active' : ''}`}
           onClick={() => onTabChange('files')}
-          title="Files"
+          title={t('rightSidebar.files')}
         >
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
           </svg>
-          <span>Files</span>
+          <span>{t('rightSidebar.files')}</span>
         </button>
         <button
           className={`rs-tab${activeTab === 'prompts' ? ' rs-tab--active' : ''}`}
           onClick={() => onTabChange('prompts')}
-          title="Prompts"
+          title={t('rightSidebar.prompts')}
         >
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 1.5h5l4 4V13a1.5 1.5 0 01-1.5 1.5h-7A1.5 1.5 0 013 13V3A1.5 1.5 0 014 1.5z" />
@@ -84,19 +98,21 @@ export const RightSidebar = memo(function RightSidebar({
             <line x1="5.5" y1="8.5" x2="10.5" y2="8.5" />
             <line x1="5.5" y1="11" x2="9" y2="11" />
           </svg>
-          <span>Prompts</span>
+          <span>{t('rightSidebar.prompts')}</span>
         </button>
       </div>
       <div className="rs-content">
-        {activeTab === 'git' && (
-          <GitPanel cwd={cwd} onOverlayView={onOverlayView} />
-        )}
-        {activeTab === 'files' && (
-          <FileExplorer cwd={cwd} onOverlayView={onOverlayView} />
-        )}
-        {activeTab === 'prompts' && (
-          <PromptsPanel cwd={cwd} onInsertPrompt={onInsertPrompt} />
-        )}
+        <Suspense fallback={<div className="fe-loading">{t('rightSidebar.loadingSidebarPanel')}</div>}>
+          {activeTab === 'git' && (
+            <LazyGitPanel cwd={cwd} onOverlayView={onOverlayView} />
+          )}
+          {activeTab === 'files' && (
+            <LazyFileExplorer cwd={cwd} onOverlayView={onOverlayView} />
+          )}
+          {activeTab === 'prompts' && (
+            <LazyPromptsPanel cwd={cwd} onInsertPrompt={onInsertPrompt} />
+          )}
+        </Suspense>
       </div>
     </aside>
   );
