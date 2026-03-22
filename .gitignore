@@ -29,6 +29,7 @@ android/
 # IDE
 .vscode/
 .idea/
+.cursor/rules/
 
 # OS
 .DS_Store
