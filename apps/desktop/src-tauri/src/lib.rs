@@ -33,6 +33,8 @@ fn start_codex_server(
     port: Option<u16>,
     codex_path: Option<String>,
 ) -> Result<CodexServerStatus, String> {
+    eprintln!("[codex-server] start_codex_server called: port={port:?}, codex_path={codex_path:?}");
+
     let mut guard = CODEX_SERVER_PROCESS
         .lock()
         .map_err(|e| format!("Lock error: {e}"))?;
@@ -40,12 +42,19 @@ fn start_codex_server(
     if let Some(ref mut child) = *guard {
         match child.try_wait() {
             Ok(None) => {
+                let pid = child.id();
+                eprintln!("[codex-server] Existing process alive, pid={pid}");
                 return Ok(CodexServerStatus {
                     running: true,
-                    pid: Some(child.id()),
+                    pid: Some(pid),
                 });
             }
-            _ => {
+            Ok(Some(status)) => {
+                eprintln!("[codex-server] Existing process exited with status: {status}");
+                *guard = None;
+            }
+            Err(e) => {
+                eprintln!("[codex-server] Error checking existing process: {e}");
                 *guard = None;
             }
         }
@@ -58,16 +67,31 @@ fn start_codex_server(
         .or_else(|| CODEX_BINARY_PATH.lock().ok().and_then(|g| g.clone()))
         .unwrap_or_else(|| "codex".to_string());
 
-    let child = Command::new(&binary)
-        .args(["app-server", "--listen", &listen_url])
-        .spawn()
-        .map_err(|e| format!("Failed to start codex app-server: {e}"))?;
+    eprintln!("[codex-server] Spawning: binary={binary:?}, listen_url={listen_url}");
+    if cfg!(target_os = "windows") {
+        eprintln!("[codex-server] Using cmd /C wrapper for Windows");
+    }
+
+    let child = if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/C", &binary, "app-server", "--listen", &listen_url])
+            .spawn()
+    } else {
+        Command::new(&binary)
+            .args(["app-server", "--listen", &listen_url])
+            .spawn()
+    }
+    .map_err(|e| {
+        eprintln!("[codex-server] SPAWN FAILED: {e}");
+        format!("Failed to start codex app-server: {e}")
+    })?;
 
     if let Ok(mut path_guard) = CODEX_BINARY_PATH.lock() {
-        *path_guard = Some(binary);
+        *path_guard = Some(binary.clone());
     }
 
     let pid = child.id();
+    eprintln!("[codex-server] Process spawned successfully: pid={pid}, binary={binary}");
     *guard = Some(child);
 
     Ok(CodexServerStatus {
@@ -244,6 +268,10 @@ fn codex_config_path() -> Result<PathBuf, String> {
     Ok(codex_dir()?.join("config.toml"))
 }
 
+fn codex_global_state_path() -> Result<PathBuf, String> {
+    Ok(codex_dir()?.join(".codex-global-state.json"))
+}
+
 fn run_git(cwd: &str, args: &[&str]) -> Option<String> {
     Command::new("git")
         .args(args)
@@ -387,6 +415,53 @@ fn read_codex_config() -> Result<CodexConfig, String> {
         instructions: str_val("instructions"),
         notify,
     })
+}
+
+#[tauri::command]
+fn read_active_workspace_roots() -> Result<Vec<String>, String> {
+    let state_path = codex_global_state_path()?;
+    if !state_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(&state_path)
+        .map_err(|e| format!("Failed to read global state: {e}"))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse global state: {e}"))?;
+
+    let Some(items) = json
+        .get("active-workspace-roots")
+        .and_then(|value| value.as_array())
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut roots = Vec::new();
+    for item in items {
+        let Some(path) = item.as_str() else {
+            continue;
+        };
+        if path.is_empty() {
+            continue;
+        }
+
+        let already_exists = roots.iter().any(|existing: &String| {
+            #[cfg(target_os = "windows")]
+            {
+                existing.eq_ignore_ascii_case(path)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                existing == path
+            }
+        });
+
+        if !already_exists {
+            roots.push(path.to_string());
+        }
+    }
+
+    Ok(roots)
 }
 
 /// Merges one key into `config.toml`; only `notify` is serialized as a TOML bool (`value` is `"true"` / `"false"`).
@@ -1064,6 +1139,7 @@ pub fn run() {
             read_prompt,
             pick_folder,
             read_codex_config,
+            read_active_workspace_roots,
             write_codex_config,
             get_system_info,
             list_project_folders,

@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.whats-coder.desktop",
   "build": {
-    "beforeDevCommand": "pnpm --dir .. dev",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:6188",
-    "beforeBuildCommand": "pnpm --dir .. build",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
