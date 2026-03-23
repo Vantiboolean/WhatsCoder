@@ -429,6 +429,33 @@ export async function moveKanbanIssue(id: string, newStatus: KanbanStatus, newSo
   );
 }
 
+const SORT_ORDER_MIN_GAP = 1e-10;
+
+export async function maybeNormalizeSortOrders(projectId: string, status: KanbanStatus): Promise<void> {
+  await ensureKanbanTables();
+  const rows = await rawSelect<{ id: string; sort_order: number }>(
+    'SELECT id, sort_order FROM kanban_issues WHERE project_id = ?1 AND status = ?2 ORDER BY sort_order ASC, created_at ASC',
+    [projectId, status]
+  );
+  if (rows.length < 2) return;
+
+  let needsNormalization = false;
+  for (let i = 1; i < rows.length; i++) {
+    if (Math.abs(rows[i].sort_order - rows[i - 1].sort_order) < SORT_ORDER_MIN_GAP) {
+      needsNormalization = true;
+      break;
+    }
+  }
+  if (!needsNormalization) return;
+
+  for (let i = 0; i < rows.length; i++) {
+    await rawExecute(
+      'UPDATE kanban_issues SET sort_order = ?1 WHERE id = ?2',
+      [i + 1, rows[i].id]
+    );
+  }
+}
+
 export async function linkThreadToIssue(issueId: string, threadId: string): Promise<void> {
   await ensureKanbanTables();
   await rawExecute(
