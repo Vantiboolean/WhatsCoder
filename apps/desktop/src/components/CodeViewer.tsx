@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import hljs from 'highlight.js';
 import { invoke } from '@tauri-apps/api/core';
+import { highlightCode, type ShikiTheme } from '../lib/shikiHighlighter';
 import { useTranslation } from 'react-i18next';
 
 export type OverlayView = {
@@ -45,22 +45,28 @@ function DiffViewer({ content }: { content: string }) {
 }
 
 function FileViewer({ content, language }: { content: string; language: string }) {
-  const codeRef = useRef<HTMLElement>(null);
+  const [html, setHtml] = useState<string>('');
 
   useEffect(() => {
-    if (codeRef.current) {
-      codeRef.current.removeAttribute('data-highlighted');
-      try { hljs.highlightElement(codeRef.current); } catch { /* ignore */ }
-    }
+    let cancelled = false;
+    const theme: ShikiTheme = document.documentElement.getAttribute('data-theme') === 'light' ? 'github-light' : 'github-dark';
+    highlightCode(content, language || 'text', theme).then((result) => {
+      if (!cancelled) setHtml(result);
+    });
+    return () => { cancelled = true; };
   }, [content, language]);
 
   return (
     <div className="cv-file-content">
-      <pre>
-        <code ref={codeRef} className={`language-${language}`}>
-          {content}
-        </code>
-      </pre>
+      {html ? (
+        <div className="cv-shiki-code" dangerouslySetInnerHTML={{ __html: html }} />
+      ) : (
+        <pre>
+          <code className={`language-${language}`}>
+            {content}
+          </code>
+        </pre>
+      )}
     </div>
   );
 }
