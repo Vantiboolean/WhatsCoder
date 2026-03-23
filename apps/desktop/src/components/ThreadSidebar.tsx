@@ -86,6 +86,12 @@ type Props = {
   onSortByChange: (sort: 'updated' | 'created') => void;
 };
 
+const INITIAL_THREAD_LIMIT = 10;
+
+function getThreadGroupKey(group: ThreadGroup): string {
+  return group.folder ? `group:${group.cwd}` : 'ungrouped';
+}
+
 function formatRelativeTime(unixSec: number, t: TFunction): string {
   const diff = Date.now() / 1000 - unixSec;
   if (diff < 60) return t('time.now');
@@ -421,8 +427,21 @@ export const ThreadSidebar = memo(function ThreadSidebar({
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [moreMenuPos, setMoreMenuPos] = useState<{ top: number; left: number } | null>(null);
   const moreMenuBtnRef = useRef<HTMLButtonElement>(null);
-  const INITIAL_THREAD_LIMIT = 10;
-  const [visibleThreadLimit, setVisibleThreadLimit] = useState(INITIAL_THREAD_LIMIT);
+  const [timelineVisibleThreadLimit, setTimelineVisibleThreadLimit] = useState(INITIAL_THREAD_LIMIT);
+  const [groupVisibleThreadLimits, setGroupVisibleThreadLimits] = useState<Record<string, number>>({});
+
+  const getVisibleThreadLimitForGroup = (group: ThreadGroup): number => {
+    const key = getThreadGroupKey(group);
+    return groupVisibleThreadLimits[key] ?? INITIAL_THREAD_LIMIT;
+  };
+
+  const handleLoadMoreGroupThreads = (group: ThreadGroup) => {
+    const key = getThreadGroupKey(group);
+    setGroupVisibleThreadLimits((prev) => ({
+      ...prev,
+      [key]: (prev[key] ?? INITIAL_THREAD_LIMIT) + INITIAL_THREAD_LIMIT,
+    }));
+  };
 
   const renderThreadForest = (
     threadsToRender: ThreadSummary[],
@@ -675,46 +694,50 @@ export const ThreadSidebar = memo(function ThreadSidebar({
               const bTime = sortBy === 'created' ? (b.createdAt) : (b.updatedAt ?? b.createdAt);
               return bTime - aTime;
             });
-            const limited = sorted.slice(0, visibleThreadLimit);
-            const hasMoreLocal = sorted.length > visibleThreadLimit;
+            const limited = sorted.slice(0, timelineVisibleThreadLimit);
+            const hasMoreLocal = sorted.length > timelineVisibleThreadLimit;
             return (
               <>
                 {renderThreadForest(limited, { ungrouped: true, showPinnedState: false })}
                 {hasMoreLocal && (
                   <button
                     className="sidebar-load-more"
-                    onClick={() => setVisibleThreadLimit((prev) => prev + INITIAL_THREAD_LIMIT)}
+                    onClick={() => setTimelineVisibleThreadLimit((prev) => prev + INITIAL_THREAD_LIMIT)}
                   >
-                    {t('sidebar.loadMoreThreads')} ({sorted.length - visibleThreadLimit})
+                    {t('sidebar.loadMoreThreads')} ({sorted.length - timelineVisibleThreadLimit})
                   </button>
                 )}
               </>
             );
           })()
         ) : (() => {
-          const totalThreadCount = threadGroups.reduce((sum, g) => sum + g.threads.length, 0);
-          let shownCount = 0;
+          const hasMoreLocal = threadGroups.some((group) => group.threads.length > getVisibleThreadLimitForGroup(group));
           const elements: React.ReactNode[] = [];
 
           for (const group of threadGroups) {
-            if (shownCount >= visibleThreadLimit) break;
+            const visibleLimit = getVisibleThreadLimitForGroup(group);
+            const groupThreads = group.threads.slice(0, visibleLimit);
+            const hasMoreGroupThreads = group.threads.length > visibleLimit;
 
             if (!group.folder) {
-              const remaining = visibleThreadLimit - shownCount;
-              const sliced = group.threads.slice(0, remaining);
               elements.push(
                 <React.Fragment key="ungrouped">
-                  {renderThreadForest(sliced, { ungrouped: true, showPinnedState: false })}
+                  {renderThreadForest(groupThreads, { ungrouped: true, showPinnedState: false })}
+                  {hasMoreGroupThreads && (
+                    <button
+                      className="sidebar-load-more"
+                      onClick={() => handleLoadMoreGroupThreads(group)}
+                    >
+                      {t('sidebar.loadMoreThreads')} ({group.threads.length - visibleLimit})
+                    </button>
+                  )}
                 </React.Fragment>
               );
-              shownCount += sliced.length;
               continue;
             }
 
             const isCollapsed = collapsedGroups.has(group.cwd);
             const displayName = folderAlias[group.cwd] || group.folder;
-            const remaining = visibleThreadLimit - shownCount;
-            const groupThreads = group.threads.slice(0, remaining);
 
             elements.push(
               <div key={group.cwd} className="thread-group">
@@ -782,29 +805,32 @@ export const ThreadSidebar = memo(function ThreadSidebar({
                   </div>
                 </div>
                 {!isCollapsed && renderThreadForest(groupThreads)}
+                {!isCollapsed && hasMoreGroupThreads && (
+                  <button
+                    className="sidebar-load-more"
+                    onClick={() => handleLoadMoreGroupThreads(group)}
+                  >
+                    {t('sidebar.loadMoreThreads')} ({group.threads.length - visibleLimit})
+                  </button>
+                )}
               </div>
             );
-            shownCount += groupThreads.length;
           }
-
-          const hasMoreLocal = totalThreadCount > visibleThreadLimit;
 
           return (
             <>
               {elements}
-              {hasMoreLocal && (
-                <button
-                  className="sidebar-load-more"
-                  onClick={() => setVisibleThreadLimit((prev) => prev + INITIAL_THREAD_LIMIT)}
-                >
-                  {t('sidebar.loadMoreThreads')} ({totalThreadCount - visibleThreadLimit})
-                </button>
-              )}
             </>
           );
         })()}
 
-        {!threadGroups.flatMap(g => g.threads).length || visibleThreadLimit >= threadGroups.reduce((s, g) => s + g.threads.length, 0) ? (
+        {(() => {
+          const hasLoadedThreads = threadGroups.some((group) => group.threads.length > 0);
+          const hasMoreLocal = viewMode === 'timeline'
+            ? threadGroups.flatMap((group) => group.threads).length > timelineVisibleThreadLimit
+            : threadGroups.some((group) => group.threads.length > getVisibleThreadLimitForGroup(group));
+
+          return !hasLoadedThreads || !hasMoreLocal ? (
           nextCursor && (
             <button
               className="sidebar-load-more"
@@ -814,7 +840,8 @@ export const ThreadSidebar = memo(function ThreadSidebar({
               {loadingMore ? t('common.loading') : t('sidebar.loadMoreThreads')}
             </button>
           )
-        ) : null}
+          ) : null;
+        })()}
       </div>
 
       {folderMenu && (

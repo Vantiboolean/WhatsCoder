@@ -3,9 +3,9 @@ import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
-import 'highlight.js/styles/github-dark.css';
+import rehypeRaw from 'rehype-raw';
 import type { ThreadDetail, ThreadItem, Turn } from '@whats-coder/shared';
+import { highlightCode, type ShikiTheme } from '../lib/shikiHighlighter';
 import { summarizeDesktopDynamicTool } from '../lib/dynamicTools';
 
 const PAGE_SIZE = 50;
@@ -298,10 +298,25 @@ export const ThreadView = memo(function ThreadView({
 function CopyableCode({ children, className }: { children: ReactNode; className?: string }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  const [highlighted, setHighlighted] = useState<string>('');
   const codeRef = useRef<HTMLElement>(null);
 
-  const handleCopy = () => {
-    const text = codeRef.current?.textContent ?? '';
+  const isBlock = !!className;
+  const lang = isBlock ? className.replace('language-', '').split(' ')[0] : '';
+  const rawText = typeof children === 'string' ? children : extractReactNodeText(children);
+
+  useEffect(() => {
+    if (!isBlock) return;
+    let cancelled = false;
+    const theme: ShikiTheme = document.documentElement.getAttribute('data-theme') === 'light' ? 'github-light' : 'github-dark';
+    highlightCode(rawText, lang || 'text', theme).then((html) => {
+      if (!cancelled) setHighlighted(html);
+    });
+    return () => { cancelled = true; };
+  }, [rawText, lang, isBlock]);
+
+  const handleCopy = useCallback(() => {
+    const text = codeRef.current?.textContent ?? rawText;
     navigator.clipboard
       .writeText(text)
       .then(() => {
@@ -309,13 +324,11 @@ function CopyableCode({ children, className }: { children: ReactNode; className?
         setTimeout(() => setCopied(false), 2000);
       })
       .catch(() => {});
-  };
+  }, [rawText]);
 
-  if (!className) {
+  if (!isBlock) {
     return <code className="tv-md-inline-code">{children}</code>;
   }
-
-  const lang = className.replace('language-', '').split(' ')[0];
 
   return (
     <>
@@ -329,11 +342,25 @@ function CopyableCode({ children, className }: { children: ReactNode; className?
           )}
         </button>
       </div>
-      <code ref={codeRef} className={`tv-md-code ${className}`}>
-        {children}
-      </code>
+      {highlighted ? (
+        <div ref={codeRef as React.RefObject<HTMLDivElement>} className="tv-md-code tv-shiki-code" dangerouslySetInnerHTML={{ __html: highlighted }} />
+      ) : (
+        <code ref={codeRef} className={`tv-md-code ${className}`}>
+          {children}
+        </code>
+      )}
     </>
   );
+}
+
+function extractReactNodeText(node: ReactNode): string {
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractReactNodeText).join('');
+  if (node && typeof node === 'object' && 'props' in node) {
+    return extractReactNodeText((node as { props: { children?: ReactNode } }).props.children);
+  }
+  return '';
 }
 
 const markdownComponents = {
@@ -361,7 +388,7 @@ const Markdown = memo(function Markdown({ children }: { children: string }) {
 
   return (
     <MarkdownErrorBoundary fallback={text}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents as never}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents as never}>
         {text}
       </ReactMarkdown>
     </MarkdownErrorBoundary>

@@ -674,6 +674,7 @@ const en = {
     execute: 'Execute',
     rerun: 'Rerun',
     viewExecution: 'View execution',
+    executionModel: 'Model: {{model}}',
     noExecutionData: 'No execution data yet.',
     autoRun: 'Auto-run',
     autoRunHint: 'Auto-execute issues when moved to In Progress',
@@ -687,6 +688,8 @@ const en = {
     executionSuccess: 'Succeeded',
     executionFailed: 'Failed',
     executionCancelled: 'Cancelled',
+    deleteConfirm: 'Delete Issue?',
+    deleteConfirmMessage: 'This issue and all its comments will be permanently deleted.',
   },
 
   reasoning: {

@@ -674,6 +674,7 @@ const zh = {
     execute: '执行',
     rerun: '重新执行',
     viewExecution: '查看执行',
+    executionModel: '模型：{{model}}',
     noExecutionData: '暂无执行数据。',
     autoRun: '自动执行',
     autoRunHint: '将 Issue 移到「进行中」时自动执行',
@@ -687,6 +688,8 @@ const zh = {
     executionSuccess: '成功',
     executionFailed: '失败',
     executionCancelled: '已取消',
+    deleteConfirm: '删除事项？',
+    deleteConfirmMessage: '此事项及其所有评论将被永久删除。',
   },
 
   reasoning: {

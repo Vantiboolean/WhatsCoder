@@ -27,10 +27,6 @@ import {
   getChatMessages,
   getAllChatHistory,
   searchChatHistory,
-  listConnections,
-  saveConnection,
-  deleteConnection,
-  setDefaultConnection,
   listAutomations,
   getAutomation,
   listRunningAutomationRuns,
@@ -43,7 +39,6 @@ import {
   type AutomationRunRow,
   type AutomationTriggerSource,
   type ChatHistoryEntry,
-  type SavedConnectionRow,
 } from './lib/db';
 import { invoke } from '@tauri-apps/api/core';
 import { automationRowToScheduleConfig, computeNextRun, computeRetryDelaySeconds } from './lib/automations';
@@ -59,7 +54,7 @@ import type { RightSidebarTab } from './components/RightSidebar';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { UsagePanel } from './components/UsagePanel';
 import { AutomationsPanel } from './components/AutomationsPanel';
-import { KanbanPanel, type KanbanProject } from './components/KanbanPanel';
+import { KanbanPanel, type KanbanProject } from './components/kanban';
 import {
   getKanbanLinkedThreadIds,
   listRunningKanbanIssueRuns,
@@ -67,9 +62,23 @@ import {
   updateKanbanIssueRun,
   type KanbanExecutionState,
 } from './lib/kanbanDb';
+import { WindowControls } from './components/WindowControls';
+import { HistoryPanel } from './components/HistoryPanel';
+import { SkillsView } from './components/SkillsView';
+import { SettingsView } from './components/SettingsView';
+import {
+  type ThemeMode, type ApprovalPolicyValue, type SandboxModeValue, type AutonomyModeValue,
+  type RateLimitSnapshotState, type RateLimitWindowState, type CreditsSnapshotState,
+  type NotificationPref, type ChromeThemeConfig, type SkillDetail,
+  AUTONOMY_PRESETS, THEME_PRESETS, DEFAULT_THEME_PRESET,
+  folderName, isObject, getConfigRoot, getConfigValue,
+  getEffectiveApprovalPolicyValue, getEffectiveSandboxModeValue,
+  deriveAutonomyModeFromConfig, formatAutonomyModeLabel, getAutonomyModeSummary,
+  applyThemeConfig, applyFontSizes,
+  resolveThemeVariant, getDefaultThemeConfig, hexAlpha, mixHex,
+} from './lib/settingsHelpers';
 
 type ReasoningLevel = 'low' | 'medium' | 'high' | 'xhigh';
-type ThemeMode = 'dark' | 'light' | 'system';
 type StartAutomationThreadOptions = { revealThread?: boolean; toast?: boolean };
 type ExecuteAutomationOptions = { revealThread?: boolean; toast?: boolean; triggerSource?: AutomationTriggerSource };
 type StartAutomationThreadResult =
@@ -331,35 +340,6 @@ const LazyRightSidebar = lazy(async () => {
   return { default: module.RightSidebar };
 });
 
-function WindowControls({ className }: { className?: string }) {
-  const [isMaximized, setIsMaximized] = useState(false);
-
-  useEffect(() => {
-    appWindow.isMaximized().then(setIsMaximized).catch(() => {});
-    const unlisten = appWindow.onResized(() => {
-      appWindow.isMaximized().then(setIsMaximized).catch(() => {});
-    });
-    return () => { unlisten.then(fn => fn()); };
-  }, []);
-
-  return (
-    <div className={`window-controls${className ? ` ${className}` : ''}`}>
-      <button className="window-ctrl window-ctrl--minimize" onClick={() => appWindow.minimize()} title="Minimize">
-        <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5" stroke="currentColor" strokeWidth="1.2" /></svg>
-      </button>
-      <button className="window-ctrl window-ctrl--maximize" onClick={() => appWindow.toggleMaximize()} title={isMaximized ? 'Restore' : 'Maximize'}>
-        {isMaximized ? (
-          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M2.5 2.5V1.5a1 1 0 011-1h5a1 1 0 011 1v5a1 1 0 01-1 1h-1" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>
-        ) : (
-          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>
-        )}
-      </button>
-      <button className="window-ctrl window-ctrl--close" onClick={() => appWindow.close()} title="Close">
-        <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" strokeWidth="1.2" /><line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" strokeWidth="1.2" /></svg>
-      </button>
-    </div>
-  );
-}
 
 function RightSidebarFallback({ width }: { width: number }) {
   return (
@@ -539,9 +519,6 @@ type AuthRefreshRequest = {
   previousAccountId?: string | null;
 };
 
-type ApprovalPolicyValue = 'untrusted' | 'on-failure' | 'on-request' | 'never' | 'granular';
-type SandboxModeValue = 'read-only' | 'workspace-write' | 'danger-full-access';
-type AutonomyModeValue = 'suggest' | 'auto-edit' | 'full-auto' | 'custom';
 
 type PendingMessage = {
   id: string;
@@ -555,55 +532,34 @@ const EMPTY_MCP_ELICITATION_REQUESTS: McpElicitationRequest[] = [];
 const EMPTY_DYNAMIC_TOOL_CALL_REQUESTS: DynamicToolCallRequest[] = [];
 const EMPTY_PENDING_MESSAGES: PendingMessage[] = [];
 
-type RateLimitWindowState = {
-  usedPercent: number;
-  windowDurationMins: number | null;
-  resetsAt: number | null;
-};
 
-type CreditsSnapshotState = {
-  hasCredits: boolean;
-  unlimited: boolean;
-  balance: string | null;
-};
-
-type RateLimitSnapshotState = {
-  limitId: string | null;
-  limitName: string | null;
-  planType: string | null;
-  primary: RateLimitWindowState | null;
-  secondary: RateLimitWindowState | null;
-  credits: CreditsSnapshotState | null;
-};
-
-const AUTONOMY_PRESETS: Record<Exclude<AutonomyModeValue, 'custom'>, { approvalPolicy: ApprovalPolicyValue; sandboxMode: SandboxModeValue }> = {
-  suggest: {
-    approvalPolicy: 'untrusted',
-    sandboxMode: 'read-only',
-  },
-  'auto-edit': {
-    approvalPolicy: 'on-request',
-    sandboxMode: 'workspace-write',
-  },
-  'full-auto': {
-    approvalPolicy: 'never',
-    sandboxMode: 'workspace-write',
-  },
-};
-
-function folderName(cwd?: string): string {
-  if (!cwd) return '';
-  const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
-  return parts[parts.length - 1] || '';
-}
 
 function normalizeCwd(cwd?: string | null): string {
   return cwd ? cwd.replace(/\\/g, '/').replace(/\/$/, '') : '';
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+function mergeUniqueCwds(cwds: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  for (const cwd of cwds) {
+    if (typeof cwd !== 'string') {
+      continue;
+    }
+
+    const trimmed = cwd.trim();
+    const normalized = normalizeCwd(trimmed);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    merged.push(trimmed);
+  }
+
+  return merged;
 }
+
 
 function storeThreadDetailCacheEntry(cache: Map<string, ThreadDetail>, detail: ThreadDetail | null) {
   if (!detail?.id) {
@@ -732,18 +688,6 @@ function flattenPermissionLabels(profile: unknown): string[] {
   }
 
   return labels;
-}
-
-function getConfigRoot(config: Record<string, unknown> | null): Record<string, unknown> | null {
-  if (!config) {
-    return null;
-  }
-
-  if (isObject(config.config)) {
-    return config.config;
-  }
-
-  return config;
 }
 
 function getConfigOrigins(config: Record<string, unknown> | null): Record<string, unknown> | null {
@@ -1338,6 +1282,8 @@ export function App() {
   const [overlayView, setOverlayView] = useState<OverlayView>(null);
   const [addedProjects, setAddedProjects] = usePersistedState<string[]>('codex-added-projects', []);
   const [hiddenProjects, setHiddenProjects] = usePersistedState<string[]>('codex-hidden-projects', []);
+  const [workspaceRootsHydrated, setWorkspaceRootsHydrated] = usePersistedState<boolean>('codex-active-workspace-roots-hydrated-v2', false);
+  const [activeWorkspaceRoots, setActiveWorkspaceRoots] = useState<string[]>([]);
   const [threadViewMode, setThreadViewMode] = usePersistedState<'project' | 'timeline'>('codex-thread-view-mode', 'project');
   const [threadSortBy, setThreadSortBy] = usePersistedState<'updated' | 'created'>('codex-thread-sort-by', 'updated');
   const [appPhase, setAppPhase] = useState<'startup' | 'main'>('main');
@@ -1562,6 +1508,62 @@ export function App() {
   }, [uiFontSize, codeFontSize]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    invoke<string[]>('read_active_workspace_roots')
+      .then((roots) => {
+        if (!cancelled) {
+          setActiveWorkspaceRoots(mergeUniqueCwds(roots));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setActiveWorkspaceRoots([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (workspaceRootsHydrated) {
+      return;
+    }
+
+    const visibleRoots = mergeUniqueCwds(activeWorkspaceRoots).filter((cwd) => {
+      const normalized = normalizeCwd(cwd);
+      return normalized && !hiddenProjects.some((project) => normalizeCwd(project) === normalized);
+    });
+    if (visibleRoots.length === 0) {
+      if (addedProjects.length > 0) {
+        setWorkspaceRootsHydrated(true);
+      }
+      return;
+    }
+
+    setAddedProjects(visibleRoots);
+
+    if (visibleRoots.length > 0) {
+      const normalizedActive = normalizeCwd(activeProjectCwd);
+      if (!normalizedActive || !visibleRoots.some((cwd) => normalizeCwd(cwd) === normalizedActive)) {
+        setActiveProjectCwd(visibleRoots[0]);
+      }
+    }
+
+    setWorkspaceRootsHydrated(true);
+  }, [
+    activeProjectCwd,
+    addedProjects,
+    activeWorkspaceRoots,
+    hiddenProjects,
+    setAddedProjects,
+    setWorkspaceRootsHydrated,
+    workspaceRootsHydrated,
+  ]);
+
+  useEffect(() => {
     document.documentElement.classList.toggle('use-pointer-cursor', pointerCursor);
   }, [pointerCursor]);
 
@@ -1591,9 +1593,9 @@ export function App() {
     const hiddenProjectSet = new Set(hiddenProjects.map((project) => normalizeCwd(project)).filter(Boolean));
     const projectFiltered = sourceThreads.filter((thread) => {
       const normalizedCwd = normalizeCwd(thread.cwd);
-      if (!normalizedCwd) return true;
+      if (!normalizedCwd) return addedProjectSet.size === 0;
       if (hiddenProjectSet.has(normalizedCwd)) return false;
-      return addedProjectSet.size === 0 || addedProjectSet.has(normalizedCwd);
+      return addedProjectSet.has(normalizedCwd);
     });
 
     const filtered = searchLower
@@ -1618,13 +1620,27 @@ export function App() {
     }
 
     const groups: ThreadGroup[] = [];
+    const groupedProjectSet = new Set<string>();
     for (const [cwd, items] of grouped) {
+      groupedProjectSet.add(normalizeCwd(cwd));
       groups.push({ folder: folderName(cwd), cwd, threads: items });
     }
+    if (!searchLower) {
+      for (const project of addedProjects) {
+        const normalized = normalizeCwd(project);
+        if (!normalized || hiddenProjectSet.has(normalized) || groupedProjectSet.has(normalized)) {
+          continue;
+        }
+        groups.push({ folder: folderName(project), cwd: project, threads: [] });
+      }
+    }
     groups.sort((a, b) => {
-      const aTime = Math.max(...a.threads.map(t => t.updatedAt ?? t.createdAt));
-      const bTime = Math.max(...b.threads.map(t => t.updatedAt ?? t.createdAt));
-      return bTime - aTime;
+      const aTime = a.threads.length > 0 ? Math.max(...a.threads.map(t => t.updatedAt ?? t.createdAt)) : -1;
+      const bTime = b.threads.length > 0 ? Math.max(...b.threads.map(t => t.updatedAt ?? t.createdAt)) : -1;
+      if (aTime !== bTime) {
+        return bTime - aTime;
+      }
+      return a.folder.localeCompare(b.folder);
     });
     if (ungrouped.length > 0) {
       groups.push({ folder: '', cwd: '', threads: ungrouped });
@@ -1650,6 +1666,12 @@ export function App() {
     }
     return Array.from(cwdMap.entries()).map(([id, name]) => ({ id, name }));
   }, [threads, folderAlias]);
+
+  const kanbanExecutionModelLabel = useMemo(() => {
+    if (!selectedModel) return null;
+    const info = models.find((m) => m.id === selectedModel);
+    return info?.displayName ?? selectedModel;
+  }, [models, selectedModel]);
 
   const refreshKanbanThreadIds = useCallback(async () => {
     try {
@@ -2740,41 +2762,52 @@ export function App() {
 
     const autoStartServer = async (retries = 2) => {
       if (cancelled) return;
+      console.log('[auto-start] Starting auto-start flow, retries:', retries);
       setServerStarting(true);
       for (let attempt = 0; attempt <= retries && !cancelled; attempt++) {
         try {
           const port = extractPort(url);
           const codexPath = codexBinPathRef.current || undefined;
+          console.log(`[auto-start] Attempt ${attempt + 1}/${retries + 1}: port=${port}, codexPath=${codexPath ?? 'default'}`);
           const result = await invoke<{ running: boolean; pid: number | null }>('start_codex_server', { port, codexPath });
+          console.log('[auto-start] start_codex_server result:', result);
           if (cancelled) return;
           if (result.running) {
             serverManagedRef.current = true;
             setServerRunning(true);
+            console.log('[auto-start] Server spawned, waiting for ready...');
             const ready = await waitForServerReady(url, 20, 500);
+            console.log('[auto-start] Server ready:', ready);
             if (cancelled) return;
             if (ready) {
               try {
+                console.log('[auto-start] Connecting to', url);
                 await handleConnect(url);
                 if (!cancelled) {
+                  console.log('[auto-start] Connected successfully!');
                   setServerLog('');
                   startHeartbeat();
                   return;
                 }
-              } catch {
+              } catch (connectErr) {
+                console.error('[auto-start] Connect failed:', connectErr);
                 if (!cancelled && attempt < retries) {
                   await new Promise(r => setTimeout(r, 1500));
                   continue;
                 }
               }
             } else if (attempt < retries) {
+              console.log('[auto-start] Server not ready, retrying in 2s...');
               await new Promise(r => setTimeout(r, 2000));
               continue;
             }
           } else if (attempt < retries) {
+            console.log('[auto-start] Server not running, retrying in 2s...');
             await new Promise(r => setTimeout(r, 2000));
             continue;
           }
-        } catch {
+        } catch (err) {
+          console.error(`[auto-start] Attempt ${attempt + 1} failed:`, err);
           if (!cancelled) fetchCodexCandidates();
           if (attempt < retries) {
             await new Promise(r => setTimeout(r, 2000));
@@ -2782,14 +2815,15 @@ export function App() {
           }
         }
       }
+      console.log('[auto-start] All attempts exhausted');
       if (!cancelled) setServerStarting(false);
     };
 
     (async () => {
-      // First try a quick probe without auto-reconnect to avoid flooding errors
+      console.log('[startup] Probing server at', url);
       try {
         await clientRef.current.connect(url, { autoReconnect: false });
-        // Connection succeeded - server is already running
+        console.log('[startup] Connection probe succeeded - server already running');
         if (cancelled) return;
         const result = await clientRef.current.listThreads({ limit: 50 });
         startTransition(() => {
@@ -2828,12 +2862,14 @@ export function App() {
             startHeartbeat();
           }
         } catch { /* ignore */ }
-      } catch {
-        // Connection failed - stop the client to prevent reconnect loops
+      } catch (probeErr) {
+        console.log('[startup] Probe failed, server not running:', probeErr);
         clientRef.current.disconnect();
         if (cancelled) return;
+        console.log('[startup] Checking if server process exists...');
         try {
           const status = await invoke<{ running: boolean; pid: number | null }>('get_codex_server_status');
+          console.log('[startup] Server process status:', status);
           if (cancelled) return;
           if (status.running) {
             serverManagedRef.current = true;
@@ -2849,11 +2885,13 @@ export function App() {
               } catch { /* auto-reconnect will handle */ }
             }
           } else {
-            // Server not running - auto-start it
+            console.log('[startup] Server process not found, auto-starting...');
             await autoStartServer();
           }
-        } catch {
+        } catch (statusErr) {
+          console.error('[startup] get_codex_server_status failed:', statusErr);
           if (!cancelled) {
+            console.log('[startup] Falling back to auto-start...');
             await autoStartServer();
           }
         }
@@ -5436,10 +5474,23 @@ export function App() {
                 <KanbanPanel
                   projects={kanbanProjects}
                   executionSyncVersion={kanbanExecutionRevision}
+                  executionModelLabel={kanbanExecutionModelLabel}
                   execCallbacks={{
                     startThread: startThreadWithConfigRecovery,
-                    startTurn: (threadId, text) => clientRef.current.startTurn(threadId, text),
-                    readThread: (threadId) => clientRef.current.readThread(threadId),
+                    startTurn: (threadId, text) => {
+                      const opts: { model?: string; reasoningEffort?: string } = {};
+                      if (selectedModel) opts.model = selectedModel;
+                      if (reasoning) opts.reasoningEffort = reasoning;
+                      return clientRef.current.startTurn(threadId, text, opts);
+                    },
+                    readThread: async (threadId) => {
+                      try {
+                        await clientRef.current.resumeThread(threadId);
+                      } catch {
+                        /* thread may already be loaded */
+                      }
+                      return clientRef.current.readThread(threadId, true);
+                    },
                     onRunStarted: ({ runId, issueId, threadId }) => {
                       startKanbanRunPolling({ runId, issueId, threadId });
                     },
@@ -6634,115 +6685,6 @@ function AuthRefreshModal({
   );
 }
 
-function HistoryPanel({
-  entries,
-  searchQuery,
-  onSearchChange,
-  threads,
-  onSelectMessage,
-}: {
-  entries: ChatHistoryEntry[];
-  searchQuery: string;
-  onSearchChange: (q: string) => void;
-  threads: import('@whats-coder/shared').ThreadSummary[];
-  onSelectMessage: (msg: string) => void;
-}) {
-  const today = new Date(); today.setHours(0,0,0,0);
-  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
-  const todayTs = today.getTime() / 1000;
-  const yesterdayTs = yesterday.getTime() / 1000;
-
-  const grouped = entries.reduce<{ today: ChatHistoryEntry[]; yesterday: ChatHistoryEntry[]; earlier: ChatHistoryEntry[] }>(
-    (acc, entry) => {
-      if (entry.created_at >= todayTs) acc.today.push(entry);
-      else if (entry.created_at >= yesterdayTs) acc.yesterday.push(entry);
-      else acc.earlier.push(entry);
-      return acc;
-    },
-    { today: [], yesterday: [], earlier: [] }
-  );
-
-  const threadMap = Object.fromEntries(threads.map(t => [t.id, t.name || t.preview || t.id]));
-
-  const renderGroup = (label: string, items: ChatHistoryEntry[]) => {
-    if (items.length === 0) return null;
-    return (
-      <div key={label} className="history-group">
-        <div className="history-group-label">{label}</div>
-        {items.map(entry => (
-          <div key={entry.id} className="history-card" onClick={() => onSelectMessage(entry.message)}>
-            <div className="history-card-icon">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
-              </svg>
-            </div>
-            <div className="history-card-info">
-              <div className="history-card-msg">{entry.message.length > 80 ? `${entry.message.slice(0, 80)}...` : entry.message}</div>
-              {entry.thread_id && threadMap[entry.thread_id] && (
-                <div className="history-card-thread">{threadMap[entry.thread_id]}</div>
-              )}
-            </div>
-            <div className="history-card-actions">
-              <button className="history-action-btn" title="Use this message">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="6,3 14,8 6,13" />
-                </svg>
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  };
-
-  return (
-    <div className="providers-panel">
-      <div className="providers-header" data-tauri-drag-region>
-        <h2>History</h2>
-      </div>
-
-      <div className="providers-toolbar">
-        <div className="history-toolbar-search">
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-            <circle cx="7" cy="7" r="5" /><path d="M11 11l3.5 3.5" />
-          </svg>
-          <input
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Search history..."
-          />
-          {searchQuery && (
-            <button className="history-search-clear" onClick={() => onSearchChange('')}>
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <line x1="2" y1="2" x2="8" y2="8" /><line x1="8" y1="2" x2="2" y2="8" />
-              </svg>
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="providers-list">
-        {entries.length === 0 ? (
-          <div className="provider-empty-state">
-            <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="20" cy="20" r="14" />
-              <path d="M20 12v8l5 3" />
-            </svg>
-            <div>鏆傛棤鍘嗗彶璁板綍</div>
-            <div>Your chat history will appear here.</div>
-          </div>
-        ) : (
-          <>
-            {renderGroup('浠婂ぉ', grouped.today)}
-            {renderGroup('鏄ㄥぉ', grouped.yesterday)}
-            {renderGroup('鏇存棭', grouped.earlier)}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function DynamicToolCallModal({
   request,
   onSubmit,
@@ -6845,1883 +6787,3 @@ function DynamicToolCallModal({
 
 /* Old AutomationsView removed - replaced by AutomationsPanel component */
 
-type SkillDetail = { name: string; path: string; description?: string; tags?: string[] };
-
-function SkillsView({ skills, onRefresh }: { skills: SkillDetail[]; onRefresh?: () => void }) {
-  const [search, setSearch] = useState('');
-  const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
-
-  const filtered = search
-    ? skills.filter(s => {
-        const q = search.toLowerCase();
-        return s.name.toLowerCase().includes(q) || s.path.toLowerCase().includes(q) || (s.description?.toLowerCase().includes(q));
-      })
-    : skills;
-
-  const grouped = useMemo(() => {
-    const groups = new Map<string, SkillDetail[]>();
-    for (const s of filtered) {
-      const parts = s.path.replace(/\\/g, '/').split('/');
-      const project = parts.length > 2 ? parts[parts.length - 3] : parts[0] || 'Project';
-      if (!groups.has(project)) groups.set(project, []);
-      groups.get(project)!.push(s);
-    }
-    return Array.from(groups.entries());
-  }, [filtered]);
-
-  return (
-    <div className="providers-panel">
-      <div className="providers-header" data-tauri-drag-region>
-        <h2>Skills</h2>
-      </div>
-
-      <div className="providers-toolbar">
-        <div className="history-toolbar-search">
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="7" cy="7" r="5" /><path d="M11 11l3.5 3.5" />
-          </svg>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search skills..." />
-          {search && (
-            <button className="history-search-clear" onClick={() => setSearch('')}>
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="2" y1="2" x2="8" y2="8" /><line x1="8" y1="2" x2="2" y2="8" /></svg>
-            </button>
-          )}
-        </div>
-        {onRefresh && (
-          <button className="providers-toolbar-btn" onClick={onRefresh}>
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M1.5 7a5.5 5.5 0 0 1 9.3-4" /><path d="M12.5 7a5.5 5.5 0 0 1-9.3 4" />
-              <polyline points="11,1 11,4 8,4" /><polyline points="3,13 3,10 6,10" />
-            </svg>
-            Refresh
-          </button>
-        )}
-      </div>
-
-      <div className="providers-list">
-        {filtered.length === 0 ? (
-          <div className="provider-empty-state">
-            <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="6" y="6" width="12" height="12" rx="3" /><rect x="22" y="6" width="12" height="12" rx="3" />
-              <rect x="6" y="22" width="12" height="12" rx="3" /><rect x="22" y="22" width="12" height="12" rx="3" />
-            </svg>
-            <div>{search ? 'No matching skills' : 'No skills found'}</div>
-            <div>{search ? 'Try a different search term.' : 'Create a SKILL.md in your project to get started.'}</div>
-          </div>
-        ) : (
-          grouped.map(([project, items]) => (
-            <div key={project} className="skills-group">
-              <div className="skills-group-header">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
-                </svg>
-                <span>{project}</span>
-                <span className="skills-group-count">{items.length}</span>
-              </div>
-              {items.map((s, i) => {
-                const isExpanded = expandedSkill === `${project}-${i}`;
-                return (
-                  <div
-                    key={i}
-                    className={`provider-card skill-provider-card${isExpanded ? ' provider-card--active' : ''}`}
-                    onClick={() => setExpandedSkill(isExpanded ? null : `${project}-${i}`)}
-                    style={{ cursor: 'pointer', flexDirection: 'column', alignItems: 'stretch' }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <div className="provider-card-icon" style={{ background: 'var(--accent-green-muted)', border: 'none' }}>
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--accent-green)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="2" y="2" width="5" height="5" rx="1" /><rect x="9" y="2" width="5" height="5" rx="1" /><rect x="2" y="9" width="5" height="5" rx="1" /><rect x="9" y="9" width="5" height="5" rx="1" />
-                        </svg>
-                      </div>
-                      <div className="provider-card-info">
-                        <div className="provider-card-name">{s.name}</div>
-                        {s.description && !isExpanded && <div className="provider-card-url">{s.description}</div>}
-                      </div>
-                      {s.tags && s.tags.length > 0 && (
-                        <span className="provider-card-badge">{s.tags[0]}</span>
-                      )}
-                      <svg className={`skill-card-chevron${isExpanded ? ' skill-card-chevron--open' : ''}`} width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 1.5l4 3.5-4 3.5" />
-                      </svg>
-                    </div>
-                    {isExpanded && (
-                      <div className="skill-card-detail">
-                        <div className="skill-detail-row"><span className="skill-detail-label">Path</span><span className="skill-detail-value mono">{s.path}</span></div>
-                        {s.description && <div className="skill-detail-row"><span className="skill-detail-label">Description</span><span className="skill-detail-value">{s.description}</span></div>}
-                        {s.tags && s.tags.length > 0 && (
-                          <div className="skill-detail-row"><span className="skill-detail-label">Tags</span><div className="skill-tags">{s.tags.map((t, ti) => <span key={ti} className="skill-tag">{t}</span>)}</div></div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ConnectionsPanel({ currentUrl, connState, onConnect, onDisconnect, serverStarting, serverRunning, serverLog, codexBinPath, onCodexBinPathChange, codexCandidates, onStartServer, onStopServer, onBrowseCodexBinary }: {
-  currentUrl: string;
-  connState: ConnectionState;
-  onConnect: (url: string) => void;
-  onDisconnect: () => void;
-  serverStarting?: boolean;
-  serverRunning?: boolean;
-  serverLog?: string;
-  codexBinPath?: string;
-  onCodexBinPathChange?: (path: string) => void;
-  codexCandidates?: string[];
-  onStartServer?: () => void;
-  onStopServer?: () => void;
-  onBrowseCodexBinary?: () => void;
-}) {
-  const [connections, setConnections] = useState<SavedConnectionRow[]>([]);
-  const [showAdd, setShowAdd] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [label, setLabel] = useState('');
-  const [host, setHost] = useState('127.0.0.1');
-  const [port, setPort] = useState('4500');
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try { setConnections(await listConnections()); } catch { /* ignore */ }
-  }, []);
-
-  useEffect(() => { void refresh(); }, [refresh]);
-
-  const connectedUrl = connState === 'connected' ? currentUrl : null;
-
-  const resetForm = () => {
-    setLabel(''); setHost('127.0.0.1'); setPort('4500');
-    setShowAdd(false); setEditingId(null);
-  };
-
-  const handleSave = async (makeDefault = false) => {
-    const trimLabel = label.trim() || `${host}:${port}`;
-    const id = editingId ?? `conn-${Date.now()}`;
-    const portNum = parseInt(port, 10) || 4500;
-    await saveConnection({ id, label: trimLabel, host: host.trim() || '127.0.0.1', port: portNum, isDefault: makeDefault });
-    resetForm();
-    await refresh();
-  };
-
-  const handleDelete = async (id: string) => {
-    await deleteConnection(id);
-    setConfirmDelete(null);
-    await refresh();
-  };
-
-  const handleSetDefault = async (id: string) => {
-    await setDefaultConnection(id);
-    await refresh();
-  };
-
-  const buildUrl = (c: SavedConnectionRow) => `ws://${c.host}:${c.port}`;
-
-  const startEdit = (c: SavedConnectionRow) => {
-    setEditingId(c.id);
-    setLabel(c.label);
-    setHost(c.host);
-    setPort(String(c.port));
-    setShowAdd(true);
-  };
-
-  const inputStyle: React.CSSProperties = {
-    width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12,
-    background: 'var(--bg-secondary)', color: 'var(--text-primary)',
-    border: '1px solid var(--border-default)', borderRadius: 6,
-    padding: '6px 10px', boxSizing: 'border-box',
-  };
-
-  return (
-    <div className="settings-panel">
-      <h2>Connections</h2>
-      <p className="settings-desc">Manage connections to Codex app-server instances. You can run multiple servers on different ports or remote hosts.</p>
-
-      <div className="settings-section">
-        <h3>Server</h3>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-          <span className={`sidebar-conn-dot sidebar-conn-dot--${connState === 'connected' ? 'connected' : serverRunning ? 'connecting' : 'disconnected'}`} />
-          <span style={{ fontSize: 13, fontWeight: 500 }}>
-            {connState === 'connected' ? 'Connected' : serverStarting ? 'Starting...' : serverRunning ? 'Running (not connected)' : 'Stopped'}
-          </span>
-        </div>
-        {serverLog && (
-          <code style={{ display: 'block', fontSize: 11, color: 'var(--text-tertiary)', background: 'var(--bg-secondary)', borderRadius: 6, padding: '6px 10px', marginBottom: 10, wordBreak: 'break-all' }}>{serverLog}</code>
-        )}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
-          <div>
-            <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Binary Path</label>
-            <div style={{ display: 'flex', gap: 4 }}>
-              <input
-                style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '6px 10px', boxSizing: 'border-box' as const }}
-                placeholder="codex (from PATH)"
-                value={codexBinPath ?? ''}
-                onChange={e => onCodexBinPathChange?.(e.target.value)}
-                spellCheck={false}
-              />
-              {onBrowseCodexBinary && (
-                <button className="btn-small" onClick={onBrowseCodexBinary} title="Browse for codex binary" style={{ fontSize: 11, flexShrink: 0 }}>Browse</button>
-              )}
-            </div>
-          </div>
-          <div>
-            <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Endpoint</label>
-            <code style={{ fontSize: 12, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{currentUrl}</code>
-          </div>
-        </div>
-        {codexCandidates && codexCandidates.length > 0 && !serverRunning && !serverStarting && (
-          <div style={{ marginBottom: 10 }}>
-            <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Detected Binaries</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {codexCandidates.map(p => (
-                <button key={p} className="btn-small" style={{ fontSize: 11, textAlign: 'left', justifyContent: 'flex-start' }} onClick={() => onCodexBinPathChange?.(p)} title={p}>
-                  {p}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: 8 }}>
-          {!serverRunning && !serverStarting && onStartServer && (
-            <button className="btn-small btn-primary" onClick={onStartServer} style={{ fontSize: 11 }}>Start Server</button>
-          )}
-          {serverRunning && onStopServer && (
-            <button className="btn-small" onClick={onStopServer} style={{ fontSize: 11 }}>Stop Server</button>
-          )}
-          {serverRunning && connState !== 'connected' && (
-            <button className="btn-small btn-primary" onClick={() => onConnect(currentUrl)} style={{ fontSize: 11 }}>Reconnect</button>
-          )}
-        </div>
-      </div>
-
-      {connections.length > 0 ? (
-        <div className="settings-section">
-          <h3>Saved Connections</h3>
-          {connections.map((c) => {
-            const wsUrl = buildUrl(c);
-            const isConnected = connectedUrl === wsUrl;
-            return (
-              <div key={c.id} className="settings-row" style={{ alignItems: 'center', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-                  <span className={`sidebar-conn-dot sidebar-conn-dot--${isConnected ? 'connected' : 'disconnected'}`} />
-                  <div style={{ minWidth: 0, overflow: 'hidden' }}>
-                    <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {c.label}
-                      {c.is_default ? <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 6 }}>DEFAULT</span> : null}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{wsUrl}</div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                  {isConnected ? (
-                    <button className="btn-small" onClick={onDisconnect} style={{ fontSize: 11 }}>Disconnect</button>
-                  ) : (
-                    <button className="btn-small btn-primary" onClick={() => onConnect(wsUrl)} style={{ fontSize: 11 }}>Connect</button>
-                  )}
-                  <button className="btn-small" onClick={() => startEdit(c)} style={{ fontSize: 11 }}>Edit</button>
-                  {!c.is_default && (
-                    <button className="btn-small" onClick={() => handleSetDefault(c.id)} style={{ fontSize: 11 }}>Set Default</button>
-                  )}
-                  {confirmDelete === c.id ? (
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      <button className="btn-small" style={{ fontSize: 11, color: 'var(--status-error)' }} onClick={() => handleDelete(c.id)}>Confirm</button>
-                      <button className="btn-small" style={{ fontSize: 11 }} onClick={() => setConfirmDelete(null)}>Cancel</button>
-                    </div>
-                  ) : (
-                    <button className="btn-small" onClick={() => setConfirmDelete(c.id)} style={{ fontSize: 11 }}>脳</button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="empty-section-card">
-          <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
-            No saved connections. Add one below to get started.
-          </span>
-        </div>
-      )}
-
-      <div className="settings-section">
-        {showAdd ? (
-          <>
-            <h3>{editingId ? 'Edit Connection' : 'Add Connection'}</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Label</label>
-                <input style={inputStyle} value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Local Server" />
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Host</label>
-                  <input style={inputStyle} value={host} onChange={e => setHost(e.target.value)} placeholder="127.0.0.1" />
-                </div>
-                <div style={{ width: 100 }}>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Port</label>
-                  <input style={inputStyle} value={port} onChange={e => setPort(e.target.value)} placeholder="4500" type="number" />
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn-small btn-primary" onClick={() => handleSave(false)}>
-                  {editingId ? 'Update' : 'Save'}
-                </button>
-                {!editingId && <button className="btn-small" onClick={() => handleSave(true)}>Save as Default</button>}
-                <button className="btn-small" onClick={resetForm}>Cancel</button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <button className="btn-small btn-primary" onClick={() => { resetForm(); setShowAdd(true); }} style={{ marginTop: 4 }}>
-            + Add Connection
-          </button>
-        )}
-      </div>
-
-      <div className="settings-section">
-        <h3>Quick Connect</h3>
-        <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
-          Connect directly without saving. The current URL from the General tab is used.
-        </p>
-        <div className="settings-row">
-          <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{currentUrl}</label>
-          {connState === 'connected' ? (
-            <button className="btn-small" onClick={onDisconnect}>Disconnect</button>
-          ) : (
-            <button className="btn-small btn-primary" onClick={() => onConnect(currentUrl)}>Connect</button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function McpSettingsPanel({ mcpServers, client, onRefresh }: {
-  mcpServers: Array<{ name: string; status: string }>;
-  client: CodexClient;
-  onRefresh: () => Promise<void>;
-}) {
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [addName, setAddName] = useState('');
-  const [addType, setAddType] = useState<'stdio' | 'sse'>('stdio');
-  const [addCommand, setAddCommand] = useState('');
-  const [addArgs, setAddArgs] = useState('');
-  const [addUrl, setAddUrl] = useState('');
-  const [addEnvText, setAddEnvText] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [togglingServer, setTogglingServer] = useState<string | null>(null);
-  const [removingServer, setRemovingServer] = useState<string | null>(null);
-  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const resetForm = () => {
-    setAddName('');
-    setAddCommand('');
-    setAddArgs('');
-    setAddUrl('');
-    setAddEnvText('');
-    setAddType('stdio');
-    setShowAddForm(false);
-    setError(null);
-  };
-
-  const handleAdd = async () => {
-    const key = addName.trim().replace(/\s+/g, '-').toLowerCase();
-    if (!key) { setError('Server name is required'); return; }
-
-    const config: Record<string, unknown> = {};
-    if (addType === 'stdio') {
-      if (!addCommand.trim()) { setError('Command is required for stdio servers'); return; }
-      config.command = addCommand.trim();
-      if (addArgs.trim()) {
-        config.args = addArgs.split(/\s+/).filter(Boolean);
-      }
-    } else {
-      if (!addUrl.trim()) { setError('URL is required for SSE servers'); return; }
-      config.url = addUrl.trim();
-    }
-
-    if (addEnvText.trim()) {
-      const env: Record<string, string> = {};
-      for (const line of addEnvText.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.includes('=')) continue;
-        const eqIdx = trimmed.indexOf('=');
-        const key = trimmed.slice(0, eqIdx).trim();
-        const val = trimmed.slice(eqIdx + 1).trim();
-        if (key) env[key] = val;
-      }
-      if (Object.keys(env).length > 0) config.env = env;
-    }
-
-    setSaving(true);
-    setError(null);
-    try {
-      await client.addMcpServer(key, config as { command?: string; args?: string[]; url?: string; env?: Record<string, string> });
-      resetForm();
-      await onRefresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to add server');
-    }
-    setSaving(false);
-  };
-
-  const handleToggle = async (serverName: string, currentStatus: string) => {
-    setTogglingServer(serverName);
-    try {
-      const shouldEnable = currentStatus === 'disabled' || currentStatus === 'stopped';
-      await client.enableMcpServer(serverName, shouldEnable);
-      await onRefresh();
-    } catch { /* ignore */ }
-    setTogglingServer(null);
-  };
-
-  const handleRemove = async (serverName: string) => {
-    setRemovingServer(serverName);
-    try {
-      await client.removeMcpServer(serverName);
-      setConfirmRemove(null);
-      await onRefresh();
-    } catch { /* ignore */ }
-    setRemovingServer(null);
-  };
-
-  const inputStyle: React.CSSProperties = {
-    width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12,
-    background: 'var(--bg-secondary)', color: 'var(--text-primary)',
-    border: '1px solid var(--border-default)', borderRadius: 6,
-    padding: '6px 10px', boxSizing: 'border-box',
-  };
-
-  return (
-    <div className="settings-panel">
-      <h2>MCP Servers</h2>
-      <p className="settings-desc">Connect external tools and data sources via the Model Context Protocol.</p>
-
-      {mcpServers.length > 0 ? (
-        <div className="settings-section">
-          <h3>Servers ({mcpServers.length})</h3>
-          {mcpServers.map((s) => (
-            <div key={s.name} className="settings-row" style={{ alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-                <span className={`sidebar-conn-dot sidebar-conn-dot--${s.status === 'running' ? 'connected' : 'disconnected'}`} />
-                <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</label>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                <span style={{ fontSize: 11, color: s.status === 'running' ? 'var(--status-active)' : 'var(--text-tertiary)', textTransform: 'capitalize', minWidth: 52, textAlign: 'right' }}>
-                  {s.status}
-                </span>
-                <button
-                  className="btn-small"
-                  disabled={togglingServer === s.name}
-                  onClick={() => handleToggle(s.name, s.status)}
-                  style={{ minWidth: 60, fontSize: 11 }}
-                >
-                  {togglingServer === s.name ? '...' : s.status === 'running' ? 'Disable' : 'Enable'}
-                </button>
-                {confirmRemove === s.name ? (
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <button className="btn-small" style={{ fontSize: 11, color: 'var(--status-error)' }} disabled={removingServer === s.name} onClick={() => handleRemove(s.name)}>
-                      {removingServer === s.name ? '...' : 'Confirm'}
-                    </button>
-                    <button className="btn-small" style={{ fontSize: 11 }} onClick={() => setConfirmRemove(null)}>Cancel</button>
-                  </div>
-                ) : (
-                  <button className="btn-small" style={{ fontSize: 11 }} onClick={() => setConfirmRemove(s.name)}>Remove</button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="empty-section-card">
-          <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
-            No MCP servers configured. Add one below or configure servers in your Codex config.
-          </span>
-        </div>
-      )}
-
-      <div className="settings-section">
-        {showAddForm ? (
-          <>
-            <h3>Add MCP Server</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Server Name *</label>
-                  <input style={inputStyle} value={addName} onChange={e => setAddName(e.target.value)} placeholder="e.g. my-server" />
-                </div>
-                <div style={{ width: 120 }}>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Type</label>
-                  <select value={addType} onChange={e => setAddType(e.target.value as 'stdio' | 'sse')} style={{ ...inputStyle, cursor: 'pointer' }}>
-                    <option value="stdio">stdio</option>
-                    <option value="sse">SSE (HTTP)</option>
-                  </select>
-                </div>
-              </div>
-
-              {addType === 'stdio' ? (
-                <>
-                  <div>
-                    <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Command *</label>
-                    <input style={inputStyle} value={addCommand} onChange={e => setAddCommand(e.target.value)} placeholder="e.g. npx, uvx, node" />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Arguments (space-separated)</label>
-                    <input style={inputStyle} value={addArgs} onChange={e => setAddArgs(e.target.value)} placeholder="e.g. -y @modelcontextprotocol/server-filesystem ." />
-                  </div>
-                </>
-              ) : (
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>URL *</label>
-                  <input style={inputStyle} value={addUrl} onChange={e => setAddUrl(e.target.value)} placeholder="e.g. http://localhost:3001/sse" />
-                </div>
-              )}
-
-              <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Environment Variables (one per line: KEY=VALUE)</label>
-                <textarea
-                  style={{ ...inputStyle, resize: 'vertical', minHeight: 48 }}
-                  rows={2}
-                  value={addEnvText}
-                  onChange={e => setAddEnvText(e.target.value)}
-                  placeholder="API_KEY=sk-..."
-                />
-              </div>
-
-              {error && <div style={{ color: 'var(--status-error)', fontSize: 12 }}>{error}</div>}
-
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn-small btn-primary" disabled={saving} onClick={handleAdd}>
-                  {saving ? 'Adding...' : 'Add Server'}
-                </button>
-                <button className="btn-small" onClick={resetForm}>Cancel</button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <button className="btn-small btn-primary" onClick={() => setShowAddForm(true)} style={{ marginTop: 4 }}>
-            + Add MCP Server
-          </button>
-        )}
-      </div>
-
-      <div className="settings-section">
-        <h3>Recommended</h3>
-        <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
-          Popular MCP servers you can add with one click.
-        </p>
-        {[
-          { name: 'filesystem', desc: 'File system access', cmd: 'npx', args: '-y @modelcontextprotocol/server-filesystem .' },
-          { name: 'playwright', desc: 'Browser automation', cmd: 'npx', args: '-y @playwright/mcp@latest' },
-          { name: 'memory', desc: 'Persistent memory store', cmd: 'npx', args: '-y @modelcontextprotocol/server-memory' },
-        ].map((rec) => {
-          const isInstalled = mcpServers.some(s => s.name === rec.name);
-          return (
-            <div key={rec.name} className="settings-row">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{rec.name}</label>
-                <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{rec.desc}</span>
-              </div>
-              <button
-                className="btn-small"
-                disabled={isInstalled}
-                onClick={async () => {
-                  try {
-                    await client.addMcpServer(rec.name, {
-                      command: rec.cmd,
-                      args: rec.args.split(' ').filter(Boolean),
-                    });
-                    await onRefresh();
-                  } catch { /* ignore */ }
-                }}
-              >
-                {isInstalled ? 'Installed' : 'Add'}
-              </button>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-type SettingsTab = 'general' | 'connections' | 'appearance' | 'config' | 'personalization' | 'mcp' | 'git' | 'archived';
-
-const SETTINGS_TAB_KEYS: { id: SettingsTab; key: string }[] = [
-  { id: 'general', key: 'settings.general' },
-  { id: 'connections', key: 'settings.connections' },
-  { id: 'appearance', key: 'settings.appearance' },
-  { id: 'config', key: 'settings.configuration' },
-  { id: 'personalization', key: 'settings.personalization' },
-  { id: 'mcp', key: 'settings.mcpServers' },
-  { id: 'git', key: 'settings.git' },
-  { id: 'archived', key: 'settings.archivedThreads' },
-];
-
-function getConfigValue(config: Record<string, unknown> | null, path: string): unknown {
-  const root = getConfigRoot(config);
-  if (!root) return undefined;
-  const parts = path.split('.');
-  let obj: unknown = root;
-  for (const p of parts) {
-    if (obj && typeof obj === 'object' && p in (obj as Record<string, unknown>)) {
-      obj = (obj as Record<string, unknown>)[p];
-    } else {
-      return undefined;
-    }
-  }
-  return obj;
-}
-
-function getApprovalPolicyValue(config: Record<string, unknown> | null): ApprovalPolicyValue | undefined {
-  const raw = getConfigValue(config, 'approvalPolicy') ?? getConfigValue(config, 'approval_policy');
-  if (typeof raw === 'string') {
-    if (raw === 'untrusted' || raw === 'on-failure' || raw === 'on-request' || raw === 'never') {
-      return raw;
-    }
-    return undefined;
-  }
-  if (raw && typeof raw === 'object' && 'granular' in (raw as Record<string, unknown>)) {
-    return 'granular';
-  }
-  return undefined;
-}
-
-function getSandboxModeValue(config: Record<string, unknown> | null): SandboxModeValue | undefined {
-  const raw = getConfigValue(config, 'sandboxMode') ?? getConfigValue(config, 'sandbox_mode') ?? getConfigValue(config, 'sandbox');
-  if (raw === 'read-only' || raw === 'workspace-write' || raw === 'danger-full-access') {
-    return raw;
-  }
-  return undefined;
-}
-
-function getEffectiveApprovalPolicyValue(config: Record<string, unknown> | null): ApprovalPolicyValue {
-  return getApprovalPolicyValue(config) ?? 'untrusted';
-}
-
-function getEffectiveSandboxModeValue(config: Record<string, unknown> | null): SandboxModeValue {
-  return getSandboxModeValue(config) ?? 'read-only';
-}
-
-function deriveAutonomyModeFromConfig(config: Record<string, unknown> | null): AutonomyModeValue {
-  if (!config) return 'suggest';
-
-  const approvalPolicy = getEffectiveApprovalPolicyValue(config);
-  const sandboxMode = getEffectiveSandboxModeValue(config);
-
-  if (approvalPolicy === AUTONOMY_PRESETS.suggest.approvalPolicy && sandboxMode === AUTONOMY_PRESETS.suggest.sandboxMode) {
-    return 'suggest';
-  }
-  if (approvalPolicy === AUTONOMY_PRESETS['auto-edit'].approvalPolicy && sandboxMode === AUTONOMY_PRESETS['auto-edit'].sandboxMode) {
-    return 'auto-edit';
-  }
-  if (
-    sandboxMode === AUTONOMY_PRESETS['full-auto'].sandboxMode &&
-    (approvalPolicy === AUTONOMY_PRESETS['full-auto'].approvalPolicy || approvalPolicy === 'on-failure')
-  ) {
-    return 'full-auto';
-  }
-  return 'custom';
-}
-
-function formatAutonomyModeLabel(mode: AutonomyModeValue): string {
-  switch (mode) {
-    case 'suggest':
-      return 'Suggest';
-    case 'auto-edit':
-      return 'Auto Edit';
-    case 'full-auto':
-      return 'Full Auto';
-    default:
-      return 'Custom';
-  }
-}
-
-function formatAutonomyModeDetail(config: Record<string, unknown> | null, mode: AutonomyModeValue): string | null {
-  if (mode !== 'custom') return null;
-
-  const approvalPolicy = getApprovalPolicyValue(config) ?? 'unknown';
-  const sandboxMode = getSandboxModeValue(config) ?? 'unknown';
-  return `${approvalPolicy} 路 ${sandboxMode}`;
-}
-
-function getAutonomyModeSummary(config: Record<string, unknown> | null): string {
-  const approvalPolicy = getEffectiveApprovalPolicyValue(config);
-  const sandboxMode = getEffectiveSandboxModeValue(config);
-  return `${approvalPolicy} / ${sandboxMode}`;
-}
-
-function formatRateLimitResetTime(unixSec: number | null): string {
-  if (typeof unixSec !== 'number' || !Number.isFinite(unixSec)) {
-    return 'Unknown';
-  }
-  return new Date(unixSec * 1000).toLocaleString();
-}
-
-type NotificationPref = 'always' | 'unfocused' | 'never';
-interface ChromeThemeConfig {
-  accent: string;
-  surface: string;
-  ink: string;
-  contrast: number;
-  fonts: { ui: string | null; code: string | null };
-  opaqueWindows: boolean;
-  semanticColors: { diffAdded: string; diffRemoved: string; skill: string };
-}
-
-interface ThemePreset {
-  id: string;
-  label: string;
-  dark: { accent: string; surface: string; ink: string };
-  light: { accent: string; surface: string; ink: string };
-  previewColor: string;
-}
-
-const THEME_PRESETS: ThemePreset[] = [
-  { id: 'codex', label: 'Codex', dark: { accent: '#0169cc', surface: '#111111', ink: '#fcfcfc' }, light: { accent: '#0169cc', surface: '#ffffff', ink: '#1a1a1b' }, previewColor: '#0169cc' },
-  { id: 'linear', label: 'Linear', dark: { accent: '#5e6ad2', surface: '#17181d', ink: '#e6e9ef' }, light: { accent: '#5e6ad2', surface: '#ffffff', ink: '#1a1a1b' }, previewColor: '#5e6ad2' },
-  { id: 'absolutely', label: 'Absolutely', dark: { accent: '#cc7d5e', surface: '#2d2d2b', ink: '#f9f9f7' }, light: { accent: '#cc7d5e', surface: '#f9f9f7', ink: '#2d2d2b' }, previewColor: '#cc7d5e' },
-  { id: 'ayu', label: 'Ayu', dark: { accent: '#e6b450', surface: '#0b0e14', ink: '#bfbdb6' }, light: { accent: '#e6b450', surface: '#fafafa', ink: '#575f66' }, previewColor: '#e6b450' },
-  { id: 'catppuccin', label: 'Catppuccin', dark: { accent: '#cba6f7', surface: '#1e1e2e', ink: '#cdd6f4' }, light: { accent: '#8839ef', surface: '#eff1f5', ink: '#4c4f69' }, previewColor: '#cba6f7' },
-  { id: 'dracula', label: 'Dracula', dark: { accent: '#bd93f9', surface: '#282a36', ink: '#f8f8f2' }, light: { accent: '#7c3aed', surface: '#f8f8f2', ink: '#282a36' }, previewColor: '#bd93f9' },
-  { id: 'everforest', label: 'Everforest', dark: { accent: '#a7c080', surface: '#2d353b', ink: '#d3c6aa' }, light: { accent: '#8da101', surface: '#fdf6e3', ink: '#5c6a72' }, previewColor: '#a7c080' },
-  { id: 'github', label: 'GitHub', dark: { accent: '#1f6feb', surface: '#0d1117', ink: '#e6edf3' }, light: { accent: '#0969da', surface: '#ffffff', ink: '#1f2328' }, previewColor: '#1f6feb' },
-  { id: 'gruvbox', label: 'Gruvbox', dark: { accent: '#d79921', surface: '#282828', ink: '#ebdbb2' }, light: { accent: '#b57614', surface: '#fbf1c7', ink: '#3c3836' }, previewColor: '#d79921' },
-  { id: 'material', label: 'Material', dark: { accent: '#82aaff', surface: '#212121', ink: '#eeffff' }, light: { accent: '#6182b8', surface: '#fafafa', ink: '#90a4ae' }, previewColor: '#82aaff' },
-  { id: 'monokai', label: 'Monokai', dark: { accent: '#a6e22e', surface: '#272822', ink: '#f8f8f2' }, light: { accent: '#78a21a', surface: '#fafaf8', ink: '#49483e' }, previewColor: '#a6e22e' },
-  { id: 'nord', label: 'Nord', dark: { accent: '#88c0d0', surface: '#2e3440', ink: '#eceff4' }, light: { accent: '#5e81ac', surface: '#eceff4', ink: '#2e3440' }, previewColor: '#88c0d0' },
-  { id: 'notion', label: 'Notion', dark: { accent: '#3183d8', surface: '#191919', ink: '#d9d9d8' }, light: { accent: '#2383e2', surface: '#ffffff', ink: '#37352f' }, previewColor: '#3183d8' },
-  { id: 'one-dark', label: 'One Dark', dark: { accent: '#61afef', surface: '#282c34', ink: '#abb2bf' }, light: { accent: '#4078f2', surface: '#fafafa', ink: '#383a42' }, previewColor: '#61afef' },
-  { id: 'rose-pine', label: 'Ros茅 Pine', dark: { accent: '#c4a7e7', surface: '#232136', ink: '#e0def4' }, light: { accent: '#907aa9', surface: '#faf4ed', ink: '#575279' }, previewColor: '#c4a7e7' },
-  { id: 'solarized', label: 'Solarized', dark: { accent: '#2aa198', surface: '#002b36', ink: '#839496' }, light: { accent: '#2aa198', surface: '#fdf6e3', ink: '#657b83' }, previewColor: '#2aa198' },
-  { id: 'tokyo-night', label: 'Tokyo Night', dark: { accent: '#7aa2f7', surface: '#1a1b26', ink: '#a9b1d6' }, light: { accent: '#34548a', surface: '#d5d6db', ink: '#343b58' }, previewColor: '#7aa2f7' },
-  { id: 'sentry', label: 'Sentry', dark: { accent: '#7055f6', surface: '#2d2935', ink: '#e6dff9' }, light: { accent: '#6c5fc7', surface: '#f5f3f7', ink: '#2d2935' }, previewColor: '#7055f6' },
-  { id: 'lobster', label: 'Lobster', dark: { accent: '#ff5c5c', surface: '#111827', ink: '#e4e4e7' }, light: { accent: '#dc2626', surface: '#ffffff', ink: '#111827' }, previewColor: '#ff5c5c' },
-  { id: 'matrix', label: 'Matrix', dark: { accent: '#1eff5a', surface: '#040805', ink: '#b8ffca' }, light: { accent: '#00a240', surface: '#f0fff4', ink: '#0a3d19' }, previewColor: '#1eff5a' },
-];
-
-const DEFAULT_THEME_PRESET = 'codex';
-
-function getDefaultThemeConfig(variant: 'dark' | 'light'): ChromeThemeConfig {
-  const preset = THEME_PRESETS.find(p => p.id === DEFAULT_THEME_PRESET) ?? THEME_PRESETS[0];
-  const colors = variant === 'dark' ? preset.dark : preset.light;
-  return {
-    ...colors,
-    contrast: 60,
-    fonts: { ui: null, code: null },
-    opaqueWindows: true,
-    semanticColors: variant === 'dark'
-      ? { diffAdded: '#40c977', diffRemoved: '#fa423e', skill: '#ad7bf9' }
-      : { diffAdded: '#00a240', diffRemoved: '#ba2623', skill: '#924ff7' },
-  };
-}
-
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace('#', '');
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-function rgbToHex(r: number, g: number, b: number): string {
-  return '#' + [r, g, b].map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('');
-}
-
-function mixHex(c1: string, c2: string, amount: number): string {
-  const [r1, g1, b1] = hexToRgb(c1);
-  const [r2, g2, b2] = hexToRgb(c2);
-  return rgbToHex(r1 + (r2 - r1) * amount, g1 + (g2 - g1) * amount, b1 + (b2 - b1) * amount);
-}
-
-function hexAlpha(hex: string, alpha: number): string {
-  const [r, g, b] = hexToRgb(hex);
-  return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
-}
-
-const THEME_STRING_PREFIX = 'codex-theme-v1:';
-
-function exportThemeString(config: ChromeThemeConfig, variant: 'dark' | 'light'): string {
-  return THEME_STRING_PREFIX + JSON.stringify({ variant, theme: config });
-}
-
-function importThemeString(str: string): { variant: 'dark' | 'light'; theme: ChromeThemeConfig } | null {
-  try {
-    const trimmed = str.trim();
-    if (!trimmed.startsWith(THEME_STRING_PREFIX)) return null;
-    const json = trimmed.slice(THEME_STRING_PREFIX.length);
-    const parsed = JSON.parse(json);
-    if (!parsed || typeof parsed !== 'object') return null;
-    const v = parsed.variant;
-    if (v !== 'dark' && v !== 'light') return null;
-    const t = parsed.theme;
-    if (!t || typeof t.accent !== 'string' || typeof t.surface !== 'string' || typeof t.ink !== 'string') return null;
-    const defaults = getDefaultThemeConfig(v);
-    return {
-      variant: v,
-      theme: {
-        accent: t.accent,
-        surface: t.surface,
-        ink: t.ink,
-        contrast: typeof t.contrast === 'number' ? Math.max(0, Math.min(100, t.contrast)) : 60,
-        fonts: { ui: t.fonts?.ui ?? null, code: t.fonts?.code ?? null },
-        opaqueWindows: typeof t.opaqueWindows === 'boolean' ? t.opaqueWindows : true,
-        semanticColors: {
-          diffAdded: t.semanticColors?.diffAdded ?? defaults.semanticColors.diffAdded,
-          diffRemoved: t.semanticColors?.diffRemoved ?? defaults.semanticColors.diffRemoved,
-          skill: t.semanticColors?.skill ?? defaults.semanticColors.skill,
-        },
-      },
-    };
-  } catch {
-    return null;
-  }
-}
-
-function applyThemeConfig(config: ChromeThemeConfig, variant: 'dark' | 'light') {
-  const root = document.documentElement;
-  const { accent, surface, ink, contrast } = config;
-  const c = contrast / 100;
-
-  root.style.setProperty('--bg-primary', surface);
-  root.style.setProperty('--bg-secondary', mixHex(surface, ink, 0.03 + c * 0.02));
-  root.style.setProperty('--bg-tertiary', mixHex(surface, ink, 0.06 + c * 0.03));
-  root.style.setProperty('--bg-elevated', mixHex(surface, ink, 0.09 + c * 0.04));
-  root.style.setProperty('--bg-hover', mixHex(surface, ink, 0.10 + c * 0.05));
-  root.style.setProperty('--bg-input', mixHex(surface, ink, 0.04 + c * 0.02));
-  root.style.setProperty('--surface-secondary', mixHex(surface, ink, 0.03 + c * 0.02));
-
-  root.style.setProperty('--text-primary', ink);
-  root.style.setProperty('--text-secondary', mixHex(ink, surface, 0.35 - c * 0.1));
-  root.style.setProperty('--text-tertiary', mixHex(ink, surface, 0.55 - c * 0.1));
-  root.style.setProperty('--text-inverse', surface);
-
-  root.style.setProperty('--accent-green', accent);
-  root.style.setProperty('--accent-green-hover', mixHex(accent, variant === 'dark' ? '#ffffff' : '#000000', 0.1));
-  root.style.setProperty('--accent-green-muted', hexAlpha(accent, 0.15));
-  root.style.setProperty('--accent-green-border', hexAlpha(accent, 0.3));
-  root.style.setProperty('--accent-green-subtle', hexAlpha(accent, 0.08));
-  root.style.setProperty('--accent-green-hover-bg', hexAlpha(accent, 0.25));
-  root.style.setProperty('--accent-green-soft', hexAlpha(accent, 0.12));
-  root.style.setProperty('--accent-green-faint', hexAlpha(accent, 0.04));
-  root.style.setProperty('--accent-blue', accent);
-  root.style.setProperty('--accent-blue-muted', hexAlpha(accent, 0.12));
-  root.style.setProperty('--accent-blue-subtle', hexAlpha(accent, 0.06));
-  root.style.setProperty('--accent-blue-border', hexAlpha(accent, 0.3));
-  root.style.setProperty('--accent-blue-soft', hexAlpha(accent, 0.1));
-  root.style.setProperty('--accent-blue-border-soft', hexAlpha(accent, 0.25));
-  root.style.setProperty('--accent-blue-hover', hexAlpha(accent, 0.2));
-  root.style.setProperty('--accent-blue-faint', hexAlpha(accent, 0.08));
-  root.style.setProperty('--accent-blue-strong', hexAlpha(accent, 0.4));
-
-  const borderAlpha = 0.06 + c * 0.04;
-  root.style.setProperty('--border-primary', mixHex(surface, ink, borderAlpha));
-  root.style.setProperty('--border-secondary', mixHex(surface, ink, borderAlpha * 1.5));
-  root.style.setProperty('--border-subtle', mixHex(surface, ink, borderAlpha * 0.6));
-
-  root.style.setProperty('--status-active', accent);
-  root.style.setProperty('--status-info', accent);
-  root.style.setProperty('--border-active', accent);
-
-  root.style.setProperty('--diff-added', config.semanticColors.diffAdded);
-  root.style.setProperty('--diff-removed', config.semanticColors.diffRemoved);
-  root.style.setProperty('--skill-color', config.semanticColors.skill);
-  root.style.setProperty('--accent-emerald', config.semanticColors.diffAdded);
-  root.style.setProperty('--accent-emerald-muted', hexAlpha(config.semanticColors.diffAdded, 0.12));
-  root.style.setProperty('--accent-emerald-subtle', hexAlpha(config.semanticColors.diffAdded, 0.08));
-
-  if (config.fonts.ui) {
-    root.style.setProperty('--font-sans', config.fonts.ui);
-  } else {
-    root.style.removeProperty('--font-sans');
-  }
-  if (config.fonts.code) {
-    root.style.setProperty('--font-mono', config.fonts.code);
-  } else {
-    root.style.removeProperty('--font-mono');
-  }
-
-  root.style.setProperty('--shadow-focus', `0 0 0 3px ${hexAlpha(accent, 0.15)}`);
-  root.style.setProperty('--shadow-focus-blue', `0 0 0 2px ${hexAlpha(accent, 0.25)}`);
-}
-
-function applyFontSizes(uiSize: number, codeSize: number) {
-  document.documentElement.style.setProperty('--ui-font-size', `${uiSize}px`);
-  document.documentElement.style.setProperty('--code-font-size', `${codeSize}px`);
-  document.body.style.fontSize = `${uiSize}px`;
-}
-
-function resolveThemeVariant(theme: ThemeMode): 'dark' | 'light' {
-  if (theme === 'system') {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  }
-  return theme === 'light' ? 'light' : 'dark';
-}
-
-function SettingsView({
-  url,
-  onUrlChange,
-  connState,
-  accountInfo,
-  rateLimits,
-  mcpServers,
-  client,
-  theme,
-  onThemeChange,
-  codexConfig,
-  onWriteConfig,
-  onRefreshMcp,
-  onConnect,
-  onDisconnect,
-  uiFontSize,
-  onUiFontSizeChange,
-  codeFontSize,
-  onCodeFontSizeChange,
-  notificationPref,
-  onNotificationPrefChange,
-  themePreset,
-  onThemePresetChange,
-  themeConfig,
-  onThemeConfigChange,
-  pointerCursor,
-  onPointerCursorChange,
-  onAutonomyModeChange,
-  autonomyMode: externalAutonomyMode,
-  isUpdatingAutonomy,
-  serverStarting,
-  serverRunning,
-  serverLog,
-  codexBinPath,
-  onCodexBinPathChange,
-  codexCandidates,
-  onStartServer,
-  onStopServer,
-  onBrowseCodexBinary,
-}: {
-  url: string;
-  onUrlChange: (url: string) => void;
-  connState: ConnectionState;
-  accountInfo: AccountInfo;
-  rateLimits: RateLimitSnapshotState | null;
-  mcpServers: Array<{ name: string; status: string }>;
-  client: CodexClient;
-  theme: ThemeMode;
-  onThemeChange: (t: ThemeMode) => void;
-  codexConfig: Record<string, unknown> | null;
-  onWriteConfig?: (key: string, value: unknown) => Promise<void>;
-  onRefreshMcp?: () => Promise<unknown>;
-  onConnect?: (url: string) => void;
-  onDisconnect?: () => void;
-  uiFontSize: number;
-  onUiFontSizeChange: (size: number) => void;
-  codeFontSize: number;
-  onCodeFontSizeChange: (size: number) => void;
-  notificationPref: NotificationPref;
-  onNotificationPrefChange: (pref: NotificationPref) => void;
-  themePreset: string;
-  onThemePresetChange: (presetId: string) => void;
-  themeConfig: ChromeThemeConfig;
-  onThemeConfigChange: (config: ChromeThemeConfig) => void;
-  pointerCursor: boolean;
-  onPointerCursorChange: (enabled: boolean) => void;
-  onAutonomyModeChange?: (mode: string) => void;
-  autonomyMode: AutonomyModeValue;
-  isUpdatingAutonomy?: boolean;
-  serverStarting?: boolean;
-  serverRunning?: boolean;
-  serverLog?: string;
-  codexBinPath?: string;
-  onCodexBinPathChange?: (path: string) => void;
-  codexCandidates?: string[];
-  onStartServer?: () => void;
-  onStopServer?: () => void;
-  onBrowseCodexBinary?: () => void;
-}) {
-  const { t, i18n } = useTranslation();
-  const [tab, setTab] = useState<SettingsTab>('general');
-  const [archivedThreads, setArchivedThreads] = useState<ThreadSummary[]>([]);
-  const [loadingArchived, setLoadingArchived] = useState(false);
-  const [editingInstructions, setEditingInstructions] = useState(false);
-  const [instructionsValue, setInstructionsValue] = useState('');
-  const [savingInstructions, setSavingInstructions] = useState(false);
-  const [editingBranchPrefix, setEditingBranchPrefix] = useState(false);
-  const [branchPrefixValue, setBranchPrefixValue] = useState('');
-  const [savingBranchPrefix, setSavingBranchPrefix] = useState(false);
-  const [editingCommitInstructions, setEditingCommitInstructions] = useState(false);
-  const [commitInstructionsValue, setCommitInstructionsValue] = useState('');
-  const [savingCommitInstructions, setSavingCommitInstructions] = useState(false);
-  const [editingProfileName, setEditingProfileName] = useState(false);
-  const [profileNameValue, setProfileNameValue] = useState('');
-  const [savingProfileName, setSavingProfileName] = useState(false);
-  const [editingResponseLang, setEditingResponseLang] = useState(false);
-  const [responseLangValue, setResponseLangValue] = useState('');
-  const [savingResponseLang, setSavingResponseLang] = useState(false);
-  const [themeImportOpen, setThemeImportOpen] = useState(false);
-  const [themeImportValue, setThemeImportValue] = useState('');
-  const [presetDropdownOpen, setPresetDropdownOpen] = useState(false);
-  const presetDropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!presetDropdownOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (presetDropdownRef.current && !presetDropdownRef.current.contains(e.target as Node)) {
-        setPresetDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [presetDropdownOpen]);
-
-  const activeVariant = resolveThemeVariant(theme);
-  const patch = (p: Partial<ChromeThemeConfig>) => onThemeConfigChange({ ...themeConfig, ...p });
-  const patchFonts = (p: Partial<ChromeThemeConfig['fonts']>) => onThemeConfigChange({ ...themeConfig, fonts: { ...themeConfig.fonts, ...p } });
-  const patchSemantic = (p: Partial<ChromeThemeConfig['semanticColors']>) => onThemeConfigChange({ ...themeConfig, semanticColors: { ...themeConfig.semanticColors, ...p } });
-
-  const handlePresetSelect = (presetId: string) => {
-    const preset = THEME_PRESETS.find(p => p.id === presetId);
-    if (!preset) return;
-    onThemePresetChange(presetId);
-    const colors = activeVariant === 'dark' ? preset.dark : preset.light;
-    onThemeConfigChange({ ...themeConfig, accent: colors.accent, surface: colors.surface, ink: colors.ink });
-    setPresetDropdownOpen(false);
-  };
-
-  const handleThemeVariantChange = (t: ThemeMode) => {
-    onThemeChange(t);
-    const newVariant = t === 'system'
-      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-      : (t === 'light' ? 'light' : 'dark');
-    const preset = THEME_PRESETS.find(p => p.id === themePreset);
-    if (preset) {
-      const colors = newVariant === 'dark' ? preset.dark : preset.light;
-      onThemeConfigChange({ ...themeConfig, accent: colors.accent, surface: colors.surface, ink: colors.ink });
-    }
-  };
-
-  const colorRow = (label: string, value: string, onSet: (v: string) => void) => (
-    <div className="settings-row">
-      <label>{label}</label>
-      <div className="settings-color-input">
-        <input type="color" value={value} onChange={e => onSet(e.target.value)} className="settings-color-native" />
-        <input
-          type="text"
-          value={value}
-          onChange={e => { const v = e.target.value; if (/^#[0-9a-fA-F]{0,6}$/.test(v)) onSet(v); }}
-          onBlur={e => { if (!/^#[0-9a-fA-F]{6}$/.test(e.target.value)) onSet(value); }}
-          className="settings-color-hex"
-          spellCheck={false}
-        />
-      </div>
-    </div>
-  );
-
-  const currentPreset = THEME_PRESETS.find(p => p.id === themePreset) ?? THEME_PRESETS[0];
-
-  useEffect(() => {
-    if (tab === 'archived' && connState === 'connected') {
-      setLoadingArchived(true);
-      (async () => {
-        try {
-          const result = await client.listThreads({ limit: 50, archived: true });
-          setArchivedThreads(result.data);
-        } catch {
-          setArchivedThreads([]);
-        }
-        setLoadingArchived(false);
-      })();
-    }
-  }, [tab, connState, client]);
-
-  return (
-    <div className="settings-layout">
-      <nav className="settings-tabs">
-        {SETTINGS_TAB_KEYS.map((tabDef) => (
-          <button
-            key={tabDef.id}
-            className={`settings-tab${tab === tabDef.id ? ' settings-tab--active' : ''}`}
-            onClick={() => setTab(tabDef.id)}
-          >
-            {t(tabDef.key)}
-          </button>
-        ))}
-      </nav>
-      <div className="settings-content">
-        {tab === 'general' && (
-          <div className="settings-panel">
-            <h2>{t('settings.general')}</h2>
-            <div className="settings-section">
-              <h3>{t('settings.language')}</h3>
-              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8 }}>
-                {t('settings.languageDesc')}
-              </p>
-              <div className="settings-row">
-                <label>{t('settings.language')}</label>
-                <select
-                  className="settings-select"
-                  value={i18n.language}
-                  onChange={(e) => { void i18n.changeLanguage(e.target.value); }}
-                >
-                  <option value="en">{t('settings.languageOptions.en')}</option>
-                  <option value="zh">{t('settings.languageOptions.zh')}</option>
-                </select>
-              </div>
-            </div>
-            <div className="settings-section">
-              <h3>{t('settings.connection')}</h3>
-              <div className="settings-row">
-                <label>{t('settings.webSocketUrl')}</label>
-                <input
-                  className="settings-input"
-                  value={url}
-                  onChange={(e) => onUrlChange(e.target.value)}
-                  disabled={connState === 'connected'}
-                />
-              </div>
-              <div className="settings-row">
-                <label>{t('settings.status')}</label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{
-                    fontSize: 13,
-                    color: connState === 'connected' ? 'var(--status-active)' : connState === 'connecting' ? 'var(--status-warning)' : 'var(--text-tertiary)',
-                    textTransform: 'capitalize',
-                  }}>
-                    {connState}
-                  </span>
-                  {connState === 'connected' ? (
-                    <button className="btn-small btn-danger" onClick={() => onDisconnect?.()}>{t('settings.disconnect')}</button>
-                  ) : connState !== 'connecting' ? (
-                    <button className="btn-small btn-primary" onClick={() => onConnect?.(url)}>{t('settings.connect')}</button>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-            {accountInfo && (
-              <div className="settings-section">
-                <h3>{t('settings.account')}</h3>
-                <div className="settings-row">
-                  <label>{t('settings.authType')}</label>
-                  <span className="settings-value">{accountInfo.type}</span>
-                </div>
-                {accountInfo.email && (
-                  <div className="settings-row">
-                    <label>{t('settings.email')}</label>
-                    <span className="settings-value">{accountInfo.email}</span>
-                  </div>
-                )}
-                {accountInfo.planType && (
-                  <div className="settings-row">
-                    <label>{t('settings.plan')}</label>
-                    <span className="settings-value" style={{ textTransform: 'capitalize' }}>
-                      {accountInfo.planType}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-            {rateLimits && (
-              <div className="settings-section">
-                <h3>{t('settings.rateLimits')}</h3>
-                {rateLimits.limitName && (
-                  <div className="settings-row">
-                    <label>{t('settings.limit')}</label>
-                    <span className="settings-value">{rateLimits.limitName}</span>
-                  </div>
-                )}
-                {rateLimits.planType && (
-                  <div className="settings-row">
-                    <label>{t('settings.planSnapshot')}</label>
-                    <span className="settings-value" style={{ textTransform: 'capitalize' }}>
-                      {rateLimits.planType}
-                    </span>
-                  </div>
-                )}
-                {rateLimits.primary && (
-                  <>
-                    <div className="settings-row">
-                      <label>{t('settings.primaryWindow')}</label>
-                      <span className="settings-value">
-                        {Math.round(rateLimits.primary.usedPercent)}% used
-                        {rateLimits.primary.windowDurationMins ? ` / ${rateLimits.primary.windowDurationMins} min` : ''}
-                      </span>
-                    </div>
-                    <div className="settings-row">
-                      <label>{t('settings.primaryReset')}</label>
-                      <span className="settings-value">{formatRateLimitResetTime(rateLimits.primary.resetsAt)}</span>
-                    </div>
-                  </>
-                )}
-                {rateLimits.secondary && (
-                  <>
-                    <div className="settings-row">
-                      <label>{t('settings.secondaryWindow')}</label>
-                      <span className="settings-value">
-                        {Math.round(rateLimits.secondary.usedPercent)}% used
-                        {rateLimits.secondary.windowDurationMins ? ` / ${rateLimits.secondary.windowDurationMins} min` : ''}
-                      </span>
-                    </div>
-                    <div className="settings-row">
-                      <label>{t('settings.secondaryReset')}</label>
-                      <span className="settings-value">{formatRateLimitResetTime(rateLimits.secondary.resetsAt)}</span>
-                    </div>
-                  </>
-                )}
-                {rateLimits.credits && (
-                  <div className="settings-row">
-                    <label>{t('settings.credits')}</label>
-                    <span className="settings-value">
-                      {rateLimits.credits.unlimited
-                        ? t('settings.unlimited')
-                        : rateLimits.credits.balance
-                        ? rateLimits.credits.balance
-                        : rateLimits.credits.hasCredits
-                        ? t('settings.available')
-                        : t('settings.unavailable')}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="settings-section">
-              <h3>{t('settings.notifications')}</h3>
-              <div className="settings-row">
-                <label>{t('settings.turnCompletion')}</label>
-                <select
-                  className="settings-select"
-                  value={notificationPref}
-                  onChange={(e) => onNotificationPrefChange(e.target.value as NotificationPref)}
-                >
-                  <option value="always">{t('settings.always')}</option>
-                  <option value="unfocused">{t('settings.whenAppUnfocused')}</option>
-                  <option value="never">{t('settings.never')}</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {tab === 'connections' && (
-          <ConnectionsPanel
-            currentUrl={url}
-            connState={connState}
-            onConnect={(wsUrl) => { onUrlChange(wsUrl); onConnect?.(wsUrl); }}
-            onDisconnect={() => onDisconnect?.()}
-            serverStarting={serverStarting}
-            serverRunning={serverRunning}
-            serverLog={serverLog}
-            codexBinPath={codexBinPath}
-            onCodexBinPathChange={onCodexBinPathChange}
-            codexCandidates={codexCandidates}
-            onStartServer={onStartServer}
-            onStopServer={onStopServer}
-            onBrowseCodexBinary={onBrowseCodexBinary}
-          />
-        )}
-
-        {tab === 'appearance' && (
-          <div className="settings-panel">
-            <h2>{t('settings.appearance')}</h2>
-            <div className="settings-section">
-              <h3>{t('settings.theme')}</h3>
-              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8 }}>
-                {t('settings.themeDesc')}
-              </p>
-              <div className="settings-theme-row">
-                {(['dark', 'light', 'system'] as ThemeMode[]).map((mode) => (
-                  <button
-                    key={mode}
-                    className={`settings-theme-option${theme === mode ? ' settings-theme-option--active' : ''}`}
-                    onClick={() => handleThemeVariantChange(mode)}
-                  >
-                    <div className={`settings-theme-preview settings-theme-preview--${mode}`} />
-                    <span>{t(`settings.${mode}`)}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="settings-section">
-              <div className="settings-variant-header">
-                <h3>{activeVariant === 'dark' ? t('settings.darkTheme') : t('settings.lightTheme')}</h3>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="btn-small" onClick={() => { setThemeImportOpen(true); setThemeImportValue(''); }}>{t('common.import')}</button>
-                  <button className="btn-small" onClick={() => {
-                    const str = exportThemeString(themeConfig, activeVariant);
-                    navigator.clipboard.writeText(str).catch(() => {});
-                  }}>{t('settings.copyTheme')}</button>
-                  <div className="settings-preset-dropdown" ref={presetDropdownRef}>
-                    <button
-                      className="settings-preset-trigger"
-                      onClick={() => setPresetDropdownOpen(!presetDropdownOpen)}
-                    >
-                      <span className="settings-preset-swatch" style={{ background: currentPreset.previewColor }} />
-                      <span>{currentPreset.label}</span>
-                      <span className="settings-preset-chevron">{presetDropdownOpen ? 'v' : '>'}</span>
-                    </button>
-                    {presetDropdownOpen && (
-                      <div className="settings-preset-menu">
-                        {THEME_PRESETS.map((p) => (
-                          <button
-                            key={p.id}
-                            className={`settings-preset-item${themePreset === p.id ? ' settings-preset-item--active' : ''}`}
-                            onClick={() => handlePresetSelect(p.id)}
-                          >
-                            <span className="settings-preset-swatch" style={{ background: p.previewColor }} />
-                            <span>{p.label}</span>
-                            {themePreset === p.id && <span style={{ marginLeft: 'auto' }} aria-hidden="true">&#10003;</span>}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              {themeImportOpen && (
-                <div className="settings-import-row">
-                  <input
-                    className="settings-input"
-                    placeholder={t('settings.pasteThemeString')}
-                    value={themeImportValue}
-                    onChange={e => setThemeImportValue(e.target.value)}
-                    style={{ flex: 1 }}
-                  />
-                  <button className="btn-small btn-primary" onClick={() => {
-                    const result = importThemeString(themeImportValue);
-                    if (result) {
-                      onThemeConfigChange(result.theme);
-                      setThemeImportOpen(false);
-                      setThemeImportValue('');
-                    }
-                  }}>{t('common.apply')}</button>
-                  <button className="btn-small" onClick={() => { setThemeImportOpen(false); setThemeImportValue(''); }}>{t('common.cancel')}</button>
-                </div>
-              )}
-              {colorRow(t('settings.accent'), themeConfig.accent, v => patch({ accent: v }))}
-              {colorRow(t('settings.background'), themeConfig.surface, v => patch({ surface: v }))}
-              {colorRow(t('settings.foreground'), themeConfig.ink, v => patch({ ink: v }))}
-              <div className="settings-row">
-                <label>{t('settings.uiFont')}</label>
-                <input
-                  className="settings-input settings-font-input"
-                  value={themeConfig.fonts.ui ?? ''}
-                  onChange={e => patchFonts({ ui: e.target.value || null })}
-                  placeholder='"DM Sans", system-ui, sans-serif'
-                  spellCheck={false}
-                />
-              </div>
-              <div className="settings-row">
-                <label>{t('settings.codeFont')}</label>
-                <input
-                  className="settings-input settings-font-input"
-                  value={themeConfig.fonts.code ?? ''}
-                  onChange={e => patchFonts({ code: e.target.value || null })}
-                  placeholder='ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace'
-                  spellCheck={false}
-                />
-              </div>
-              <div className="settings-row">
-                <label>{t('settings.translucentSidebar')}</label>
-                <button
-                  className={`settings-toggle${!themeConfig.opaqueWindows ? ' settings-toggle--on' : ''}`}
-                  onClick={() => patch({ opaqueWindows: !themeConfig.opaqueWindows })}
-                />
-              </div>
-              <div className="settings-row">
-                <label>{t('settings.contrast')}</label>
-                <div className="settings-slider-row">
-                  <input
-                    type="range"
-                    className="settings-slider"
-                    min={0} max={100} step={1}
-                    value={themeConfig.contrast}
-                    onChange={e => patch({ contrast: Number(e.target.value) })}
-                  />
-                  <span className="settings-slider-value">{themeConfig.contrast}</span>
-                </div>
-              </div>
-              <details style={{ marginTop: 4 }}>
-                <summary style={{ fontSize: 11, color: 'var(--text-tertiary)', cursor: 'pointer', userSelect: 'none' }}>{t('settings.semanticColors')}</summary>
-                <div style={{ paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {colorRow(t('settings.diffAdded'), themeConfig.semanticColors.diffAdded, v => patchSemantic({ diffAdded: v }))}
-                  {colorRow(t('settings.diffRemoved'), themeConfig.semanticColors.diffRemoved, v => patchSemantic({ diffRemoved: v }))}
-                  {colorRow('Skill', themeConfig.semanticColors.skill, v => patchSemantic({ skill: v }))}
-                </div>
-              </details>
-            </div>
-            <div className="settings-section">
-              <h3>{t('settings.general')}</h3>
-              <div className="settings-row">
-                <div>
-                  <label>{t('settings.pointerCursor')}</label>
-                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                    {t('settings.pointerCursorDesc')}
-                  </p>
-                </div>
-                <button
-                  className={`settings-toggle${pointerCursor ? ' settings-toggle--on' : ''}`}
-                  onClick={() => onPointerCursorChange(!pointerCursor)}
-                />
-              </div>
-              <div className="settings-row">
-                <div>
-                  <label>{t('settings.uiFontSize')}</label>
-                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                    {t('settings.uiFontSizeDesc')}
-                  </p>
-                </div>
-                <div className="settings-stepper">
-                  <button disabled={uiFontSize <= 10} onClick={() => { const v = Math.max(10, uiFontSize - 1); onUiFontSizeChange(v); applyFontSizes(v, codeFontSize); }}>-</button>
-                  <span className="settings-stepper-value">{uiFontSize}px</span>
-                  <button disabled={uiFontSize >= 22} onClick={() => { const v = Math.min(22, uiFontSize + 1); onUiFontSizeChange(v); applyFontSizes(v, codeFontSize); }}>+</button>
-                </div>
-              </div>
-              <div className="settings-row">
-                <div>
-                  <label>{t('settings.codeFontSize')}</label>
-                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                    {t('settings.codeFontSizeDesc')}
-                  </p>
-                </div>
-                <div className="settings-stepper">
-                  <button disabled={codeFontSize <= 10} onClick={() => { const v = Math.max(10, codeFontSize - 1); onCodeFontSizeChange(v); applyFontSizes(uiFontSize, v); }}>-</button>
-                  <span className="settings-stepper-value">{codeFontSize}px</span>
-                  <button disabled={codeFontSize >= 22} onClick={() => { const v = Math.min(22, codeFontSize + 1); onCodeFontSizeChange(v); applyFontSizes(uiFontSize, v); }}>+</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {tab === 'config' && (
-          <div className="settings-panel">
-            <h2>{t('settings.configuration')}</h2>
-            <p className="settings-desc">{t('settings.configureApproval')}</p>
-            <div className="settings-section">
-              <h3>{t('settings.autonomyPreset')}</h3>
-              <div className="settings-row">
-                <label>{t('settings.preset')}</label>
-                {onAutonomyModeChange ? (
-                  <select
-                    className="settings-select"
-                    value={externalAutonomyMode}
-                    disabled={isUpdatingAutonomy}
-                    onChange={(e) => onAutonomyModeChange(e.target.value)}
-                  >
-                    <option value="suggest">{t('settings.suggest')}</option>
-                    <option value="auto-edit">{t('settings.autoEdit')}</option>
-                    <option value="full-auto">{t('settings.fullAuto')}</option>
-                    {externalAutonomyMode === 'custom' && <option value="custom">{t('settings.custom')}</option>}
-                  </select>
-                ) : (
-                  <span className="settings-value">
-                    {formatAutonomyModeLabel(deriveAutonomyModeFromConfig(codexConfig))}
-                  </span>
-                )}
-              </div>
-              {externalAutonomyMode !== 'custom' && (
-                <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6 }}>
-                  Preset sets both approval policy and sandbox mode together.
-                </p>
-              )}
-              {(() => {
-                const detail = formatAutonomyModeDetail(codexConfig, externalAutonomyMode);
-                return detail ? (
-                  <p style={{ fontSize: 11, color: 'var(--status-warning)', marginTop: 4 }}>
-                    Custom: {detail}
-                  </p>
-                ) : null;
-              })()}
-            </div>
-            <div className="settings-section">
-              <h3>{t('settings.approvalPolicy')}</h3>
-              <div className="settings-row">
-                <label>{t('settings.policy')}</label>
-                {onWriteConfig ? (
-                  <select
-                    className="settings-select"
-                    value={getEffectiveApprovalPolicyValue(codexConfig)}
-                    onChange={async (e) => {
-                      try {
-                        await onWriteConfig('approval_policy', e.target.value);
-                      } catch { /* ignore */ }
-                    }}
-                  >
-                    <option value="untrusted">{t('settings.untrusted')}</option>
-                    <option value="on-failure">{t('settings.onFailure')}</option>
-                    <option value="on-request">{t('settings.onRequest')}</option>
-                    <option value="never">{t('settings.never')}</option>
-                  </select>
-                ) : (
-                  <span className="settings-value">
-                    {getAutonomyModeSummary(codexConfig).split(' / ')[0]}
-                  </span>
-                )}
-              </div>
-              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
-                Controls when Codex asks for user approval before executing commands.
-              </p>
-            </div>
-            <div className="settings-section">
-              <h3>{t('settings.sandbox')}</h3>
-              <div className="settings-row">
-                <label>{t('settings.sandboxMode')}</label>
-                {onWriteConfig ? (
-                  <select
-                    className="settings-select"
-                    value={getEffectiveSandboxModeValue(codexConfig)}
-                    onChange={async (e) => {
-                      try {
-                        await onWriteConfig('sandbox_mode', e.target.value);
-                      } catch { /* ignore */ }
-                    }}
-                  >
-                    <option value="read-only">{t('settings.readOnly')}</option>
-                    <option value="workspace-write">{t('settings.workspaceWrite')}</option>
-                    <option value="danger-full-access">{t('settings.fullAccess')}</option>
-                  </select>
-                ) : (
-                  <span className="settings-value settings-value--accent">
-                    {getAutonomyModeSummary(codexConfig).split(' / ')[1]}
-                  </span>
-                )}
-              </div>
-              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
-                Controls what level of filesystem access Codex has.
-              </p>
-            </div>
-            {codexConfig && Array.isArray((codexConfig as Record<string, unknown>).layers) && (
-              <div className="settings-section">
-                <h3>Config Layers</h3>
-                <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
-                  Configuration is merged from these sources (highest priority first):
-                </p>
-                {((codexConfig as Record<string, unknown>).layers as Array<Record<string, unknown>>).map((layer, i) => {
-                  const name = (layer.name as Record<string, unknown> | undefined);
-                  const layerType = typeof name?.type === 'string' ? name.type : 'unknown';
-                  const file = typeof name?.file === 'string' ? name.file : null;
-                  const dotCodexFolder = typeof name?.dotCodexFolder === 'string' ? name.dotCodexFolder : null;
-                  const filePath = file ?? (dotCodexFolder ? `${dotCodexFolder}/config.toml` : null);
-                  return (
-                    <div key={i} className="settings-row" style={{ alignItems: 'flex-start' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <label style={{ textTransform: 'capitalize', fontWeight: 500 }}>{layerType}</label>
-                        {filePath && (
-                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{filePath}</span>
-                        )}
-                      </div>
-                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                        {layer.version != null ? `v${layer.version}` : ''}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            {codexConfig && typeof (codexConfig as Record<string, unknown>).origins === 'object' && (codexConfig as Record<string, unknown>).origins != null && (
-              <div className="settings-section">
-                <h3>Config Origins</h3>
-                <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
-                  Shows which layer each config key originates from.
-                </p>
-                {Object.entries((codexConfig as Record<string, unknown>).origins as Record<string, unknown>)
-                  .filter(([, v]) => v != null)
-                  .slice(0, 30)
-                  .map(([key, origin]) => {
-                    const o = origin as Record<string, unknown> | null;
-                    const originName = o?.name as Record<string, unknown> | undefined;
-                    const originType = typeof originName?.type === 'string' ? originName.type : '?';
-                    return (
-                      <div key={key} className="settings-row">
-                        <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{key}</label>
-                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'capitalize' }}>{originType}</span>
-                      </div>
-                    );
-                  })}
-              </div>
-            )}
-            {codexConfig && (
-              <div className="settings-section">
-                <h3>Effective Config</h3>
-                <pre className="settings-text-block" style={{ fontFamily: 'var(--font-mono)', fontSize: 12, maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {JSON.stringify(getConfigRoot(codexConfig) ?? codexConfig, null, 2)}
-                </pre>
-              </div>
-            )}
-          </div>
-        )}
-
-        {tab === 'personalization' && (
-          <div className="settings-panel">
-            <h2>{t('settings.personalization')}</h2>
-            <p className="settings-desc">{t('settings.personalizeDesc')}</p>
-            <div className="settings-section">
-              <h3>{t('settings.profileName')}</h3>
-              {editingProfileName ? (
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <input
-                    value={profileNameValue}
-                    onChange={e => setProfileNameValue(e.target.value)}
-                    placeholder={t('settings.profileNamePlaceholder')}
-                    style={{ fontFamily: 'var(--font-sans)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 4, padding: '5px 10px', width: 200 }}
-                  />
-                  <button className="btn-small btn-primary" disabled={savingProfileName} onClick={async () => {
-                    if (!onWriteConfig) return;
-                    setSavingProfileName(true);
-                    try { await onWriteConfig('profileName', profileNameValue); setEditingProfileName(false); } catch {}
-                    setSavingProfileName(false);
-                  }}>{savingProfileName ? '...' : t('common.save')}</button>
-                  <button className="btn-small" onClick={() => setEditingProfileName(false)}>{t('common.cancel')}</button>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span className="settings-value">
-                    {String(getConfigValue(codexConfig, 'profileName') ?? t('settings.notSet'))}
-                  </span>
-                  {onWriteConfig && (
-                    <button className="btn-small" onClick={() => {
-                      const current = getConfigValue(codexConfig, 'profileName');
-                      setProfileNameValue(typeof current === 'string' ? current : '');
-                      setEditingProfileName(true);
-                    }}>{t('common.edit')}</button>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="settings-section">
-              <h3>{t('settings.responseLang')}</h3>
-              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8 }}>
-                {t('settings.responseLangDesc')}
-              </p>
-              {editingResponseLang ? (
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <input
-                    value={responseLangValue}
-                    onChange={e => setResponseLangValue(e.target.value)}
-                    placeholder={t('settings.responseLangPlaceholder')}
-                    style={{ fontFamily: 'var(--font-sans)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 4, padding: '5px 10px', width: 200 }}
-                  />
-                  <button className="btn-small btn-primary" disabled={savingResponseLang} onClick={async () => {
-                    if (!onWriteConfig) return;
-                    setSavingResponseLang(true);
-                    try { await onWriteConfig('responseLanguage', responseLangValue); setEditingResponseLang(false); } catch {}
-                    setSavingResponseLang(false);
-                  }}>{savingResponseLang ? '...' : t('common.save')}</button>
-                  <button className="btn-small" onClick={() => setEditingResponseLang(false)}>{t('common.cancel')}</button>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span className="settings-value">
-                    {String(getConfigValue(codexConfig, 'responseLanguage') ?? t('settings.notSet'))}
-                  </span>
-                  {onWriteConfig && (
-                    <button className="btn-small" onClick={() => {
-                      const current = getConfigValue(codexConfig, 'responseLanguage');
-                      setResponseLangValue(typeof current === 'string' ? current : '');
-                      setEditingResponseLang(true);
-                    }}>{t('common.edit')}</button>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="settings-section">
-              <h3>{t('settings.customInstructions')}</h3>
-              {editingInstructions ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <textarea
-                    value={instructionsValue}
-                    onChange={e => setInstructionsValue(e.target.value)}
-                    rows={10}
-                    style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 10px', resize: 'vertical', boxSizing: 'border-box' }}
-                    placeholder={t('settings.customInstructionsPlaceholder')}
-                  />
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn-small btn-primary" disabled={savingInstructions} onClick={async () => {
-                      if (!onWriteConfig) return;
-                      setSavingInstructions(true);
-                      try { await onWriteConfig('instructions', instructionsValue); setEditingInstructions(false); } catch {}
-                      setSavingInstructions(false);
-                    }}>{savingInstructions ? t('settings.saving') : t('common.save')}</button>
-                    <button className="btn-small" onClick={() => setEditingInstructions(false)}>{t('common.cancel')}</button>
-                  </div>
-                </div>
-              ) : (() => {
-                const instructions = getConfigValue(codexConfig, 'instructions') ?? getConfigValue(codexConfig, 'customInstructions');
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {instructions ? (
-                      <pre className="settings-text-block" style={{ fontFamily: 'var(--font-mono)', fontSize: 12, maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                        {typeof instructions === 'string' ? instructions : JSON.stringify(instructions, null, 2)}
-                      </pre>
-                    ) : (
-                      <div className="settings-text-block">{t('settings.noCustomInstructions')}</div>
-                    )}
-                    {onWriteConfig && (
-                      <button className="btn-small" style={{ alignSelf: 'flex-start' }} onClick={() => {
-                        const current = getConfigValue(codexConfig, 'instructions') ?? getConfigValue(codexConfig, 'customInstructions');
-                        setInstructionsValue(typeof current === 'string' ? current : '');
-                        setEditingInstructions(true);
-                      }}>{t('common.edit')}</button>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-        )}
-
-        {tab === 'mcp' && (
-          <McpSettingsPanel mcpServers={mcpServers} client={client} onRefresh={async () => {
-            if (onRefreshMcp) await onRefreshMcp();
-          }} />
-        )}
-
-        {tab === 'git' && (
-          <div className="settings-panel">
-            <h2>{t('settings.git')}</h2>
-            <div className="settings-section">
-              <h3>{t('settings.branchPrefix')}</h3>
-              <div className="settings-row">
-                <label>{t('settings.branchPrefixLabel')}</label>
-                {editingBranchPrefix ? (
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <input
-                      value={branchPrefixValue}
-                      onChange={e => setBranchPrefixValue(e.target.value)}
-                      style={{ fontFamily: 'var(--font-mono)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 4, padding: '3px 8px', width: 140 }}
-                    />
-                    <button className="btn-small btn-primary" disabled={savingBranchPrefix} onClick={async () => {
-                      if (!onWriteConfig) return;
-                      setSavingBranchPrefix(true);
-                      try { await onWriteConfig('git.branchPrefix', branchPrefixValue); setEditingBranchPrefix(false); } catch {}
-                      setSavingBranchPrefix(false);
-                    }}>{savingBranchPrefix ? '...' : t('common.save')}</button>
-                    <button className="btn-small" onClick={() => setEditingBranchPrefix(false)}>{t('common.cancel')}</button>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span className="settings-value" style={{ fontFamily: 'var(--font-mono)' }}>
-                      {String(getConfigValue(codexConfig, 'git.branchPrefix') ?? getConfigValue(codexConfig, 'branchPrefix') ?? 'codex/')}
-                    </span>
-                    {onWriteConfig && (
-                      <button className="btn-small" onClick={() => {
-                        const current = getConfigValue(codexConfig, 'git.branchPrefix') ?? getConfigValue(codexConfig, 'branchPrefix') ?? 'codex/';
-                        setBranchPrefixValue(String(current));
-                        setEditingBranchPrefix(true);
-                      }}>{t('common.edit')}</button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="settings-section">
-              <h3>{t('settings.pushSettings')}</h3>
-              <div className="settings-row">
-                <label>{t('settings.forcePushLease')}</label>
-                {onWriteConfig ? (
-                  <button className="btn-small" onClick={() => onWriteConfig('git.forcePush', !(getConfigValue(codexConfig, 'git.forcePush') === true))}>
-                    {getConfigValue(codexConfig, 'git.forcePush') === true ? t('settings.on') : t('settings.off')}
-                  </button>
-                ) : (
-                  <span className="settings-value">{getConfigValue(codexConfig, 'git.forcePush') === true ? t('settings.on') : t('settings.off')}</span>
-                )}
-              </div>
-              <div className="settings-row">
-                <label>{t('settings.draftPullRequests')}</label>
-                {onWriteConfig ? (
-                  <button className="btn-small" onClick={() => onWriteConfig('git.draftPullRequests', !(getConfigValue(codexConfig, 'git.draftPullRequests') === true))}>
-                    {getConfigValue(codexConfig, 'git.draftPullRequests') === true ? t('settings.on') : t('settings.off')}
-                  </button>
-                ) : (
-                  <span className="settings-value">{getConfigValue(codexConfig, 'git.draftPullRequests') === true ? t('settings.on') : t('settings.off')}</span>
-                )}
-              </div>
-            </div>
-            <div className="settings-section">
-              <h3>{t('settings.commitInstructions')}</h3>
-              {editingCommitInstructions ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <textarea
-                    value={commitInstructionsValue}
-                    onChange={e => setCommitInstructionsValue(e.target.value)}
-                    rows={6}
-                    style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 10px', resize: 'vertical', boxSizing: 'border-box' }}
-                    placeholder={t('settings.commitInstructionsPlaceholder')}
-                  />
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn-small btn-primary" disabled={savingCommitInstructions} onClick={async () => {
-                      if (!onWriteConfig) return;
-                      setSavingCommitInstructions(true);
-                      try { await onWriteConfig('git.commitInstructions', commitInstructionsValue); setEditingCommitInstructions(false); } catch {}
-                      setSavingCommitInstructions(false);
-                    }}>{savingCommitInstructions ? t('settings.saving') : t('common.save')}</button>
-                    <button className="btn-small" onClick={() => setEditingCommitInstructions(false)}>{t('common.cancel')}</button>
-                  </div>
-                </div>
-              ) : (() => {
-                const commitInstructions = getConfigValue(codexConfig, 'git.commitInstructions') ?? getConfigValue(codexConfig, 'commitInstructions');
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {commitInstructions ? (
-                      <pre className="settings-text-block" style={{ fontFamily: 'var(--font-mono)', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                        {String(commitInstructions)}
-                      </pre>
-                    ) : (
-                      <div className="settings-text-block">
-                        {t('settings.commitInstructionsHint')}
-                      </div>
-                    )}
-                    {onWriteConfig && (
-                      <button className="btn-small" style={{ alignSelf: 'flex-start' }} onClick={() => {
-                        const current = getConfigValue(codexConfig, 'git.commitInstructions') ?? getConfigValue(codexConfig, 'commitInstructions');
-                        setCommitInstructionsValue(typeof current === 'string' ? current : '');
-                        setEditingCommitInstructions(true);
-                      }}>{t('common.edit')}</button>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-        )}
-
-        {tab === 'archived' && (
-          <div className="settings-panel">
-            <h2>{t('settings.archivedThreads')}</h2>
-            {loadingArchived ? (
-              <div className="settings-text-block">{t('settings.loadingArchived')}</div>
-            ) : archivedThreads.length === 0 ? (
-              <div className="empty-section-card">
-                <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
-                  {t('settings.noArchivedThreads')}
-                </span>
-              </div>
-            ) : (
-              <div className="archived-list">
-                {archivedThreads.map((th) => (
-                  <div key={th.id} className="archived-item">
-                    <div className="archived-info">
-                      <span className="archived-name">{th.name || th.preview || t('sidebar.untitled')}</span>
-                      <span className="archived-meta">
-                        {new Date((th.updatedAt ?? th.createdAt) * 1000).toLocaleDateString()}
-                        {th.cwd && ` · ${folderName(th.cwd)}`}
-                      </span>
-                    </div>
-                    <button className="btn-small" onClick={async () => {
-                      try {
-                        await client.unarchiveThread(th.id);
-                        setArchivedThreads((prev) => prev.filter((x) => x.id !== th.id));
-                      } catch { /* ignore */ }
-                    }}>
-                      {t('settings.unarchive')}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
