@@ -46,16 +46,16 @@ import { DESKTOP_DYNAMIC_TOOL_SPECS, executeDesktopDynamicToolCall } from './lib
 import { getClaudeClient, isClaudeModelId, normalizeClaudeModelId } from './lib/api/claudeClient';
 import { applyServerEventToThreadDetail, findThreadItem, mergeThreadDetailWithLocalState } from './state/threadState';
 import { CodeViewer, type OverlayView } from './pages/code/CodeViewer';
-import { ThreadSidebar } from './pages/thread/ThreadSidebar';
-import { ThreadWorkspace } from './pages/thread/ThreadWorkspace';
-import { ChatComposer, type ChatComposerHandle } from './pages/thread/ChatComposer';
-import { ThreadToolbar } from './pages/thread/ThreadToolbar';
+import { ThreadSidebar } from './pages/chat/ThreadSidebar';
+import { ThreadWorkspace } from './pages/chat/ThreadWorkspace';
+import { ChatComposer, type ChatComposerHandle } from './pages/chat/ChatComposer';
+import { ThreadToolbar } from './pages/chat/ThreadToolbar';
 import type { RightSidebarTab } from './pages/panels/RightSidebar';
-import { ProvidersPanel } from './pages/settings/ProvidersPanel';
-import { UsagePanel } from './pages/panels/UsagePanel';
-import { AutomationsPanel } from './pages/panels/AutomationsPanel';
+import { ProvidersPanel } from './pages/providers/ProvidersPanel';
+import { UsagePanel } from './pages/usage/UsagePanel';
+import { AutomationsPanel } from './pages/automations/AutomationsPanel';
 import { KanbanPanel, type KanbanProject } from './pages/kanban';
-import { WorkspacePanel, type WorkspaceDraftPrefill, type WorkspaceSectionId } from './pages/panels/WorkspacePanel';
+import { WorkspacePanel, type WorkspaceDraftPrefill, type WorkspaceSectionId } from './pages/workspace/WorkspacePanel';
 import {
   getKanbanLinkedThreadIds,
   listRunningKanbanIssueRuns,
@@ -64,8 +64,8 @@ import {
   type KanbanExecutionState,
 } from './lib/db/kanbanDb';
 import { WindowControls } from './pages/layout/WindowControls';
-import { HistoryPanel } from './pages/panels/HistoryPanel';
-import { SkillsView } from './pages/settings/SkillsView';
+import { HistoryPanel } from './pages/history/HistoryPanel';
+import { SkillsView } from './pages/skills/SkillsView';
 import { SettingsView } from './pages/settings/SettingsView';
 import {
   type ThemeMode, type ApprovalPolicyValue, type SandboxModeValue, type AutonomyModeValue,

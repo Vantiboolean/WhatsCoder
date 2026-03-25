@@ -30,8 +30,8 @@ import {
   type WorkspaceDraftSummary,
 } from '../../lib/utils/workspaceDrafts';
 import { DesktopEmptyState, DesktopPageShell } from '../layout/DesktopPageShell';
-import type { WorkspaceDraftPrefill, WorkspaceSectionId } from '../panels/WorkspacePanel';
-import { ThreadView } from '../thread/ThreadView';
+import type { WorkspaceDraftPrefill, WorkspaceSectionId } from '../workspace/WorkspacePanel';
+import { ThreadView } from '../chat/ThreadView';
 import { KanbanColumn } from './KanbanColumn';
 import { FilterBar } from './FilterBar';
 import { IssueDialog } from './IssueDialog';

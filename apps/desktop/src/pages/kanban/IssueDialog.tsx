@@ -12,7 +12,7 @@ import {
   type KanbanComment,
   type KanbanIssueRun,
 } from '../../lib/db/kanbanDb';
-import type { WorkspaceSectionId } from '../panels/WorkspacePanel';
+import type { WorkspaceSectionId } from '../workspace/WorkspacePanel';
 import { PRIORITY_I18N, EXECUTION_STATE_I18N, genId, formatDate, formatDateTime } from './kanban-helpers';
 
 export function IssueDialog({
