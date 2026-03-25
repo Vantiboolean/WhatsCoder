@@ -1,4 +1,4 @@
-import type { ProviderAppType } from '../lib/db';
+import type { ProviderAppType } from '../lib/db/db';
 
 export interface ProviderPreset {
   name: string;

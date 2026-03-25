@@ -39,34 +39,34 @@ import {
   type AutomationRunRow,
   type AutomationTriggerSource,
   type ChatHistoryEntry,
-} from './lib/db';
+} from './lib/db/db';
 import { invoke } from '@tauri-apps/api/core';
-import { automationRowToScheduleConfig, computeNextRun, computeRetryDelaySeconds } from './lib/automations';
-import { DESKTOP_DYNAMIC_TOOL_SPECS, executeDesktopDynamicToolCall } from './lib/dynamicTools';
-import { getClaudeClient, isClaudeModelId, normalizeClaudeModelId } from './lib/claudeClient';
+import { automationRowToScheduleConfig, computeNextRun, computeRetryDelaySeconds } from './lib/utils/automations';
+import { DESKTOP_DYNAMIC_TOOL_SPECS, executeDesktopDynamicToolCall } from './lib/api/dynamicTools';
+import { getClaudeClient, isClaudeModelId, normalizeClaudeModelId } from './lib/api/claudeClient';
 import { applyServerEventToThreadDetail, findThreadItem, mergeThreadDetailWithLocalState } from './state/threadState';
-import { CodeViewer, type OverlayView } from './components/CodeViewer';
-import { ThreadSidebar } from './components/ThreadSidebar';
-import { ThreadWorkspace } from './components/ThreadWorkspace';
-import { ChatComposer, type ChatComposerHandle } from './components/ChatComposer';
-import { ThreadToolbar } from './components/ThreadToolbar';
-import type { RightSidebarTab } from './components/RightSidebar';
-import { ProvidersPanel } from './components/ProvidersPanel';
-import { UsagePanel } from './components/UsagePanel';
-import { AutomationsPanel } from './components/AutomationsPanel';
-import { KanbanPanel, type KanbanProject } from './components/kanban';
-import { WorkspacePanel, type WorkspaceDraftPrefill, type WorkspaceSectionId } from './components/WorkspacePanel';
+import { CodeViewer, type OverlayView } from './pages/code/CodeViewer';
+import { ThreadSidebar } from './pages/thread/ThreadSidebar';
+import { ThreadWorkspace } from './pages/thread/ThreadWorkspace';
+import { ChatComposer, type ChatComposerHandle } from './pages/thread/ChatComposer';
+import { ThreadToolbar } from './pages/thread/ThreadToolbar';
+import type { RightSidebarTab } from './pages/panels/RightSidebar';
+import { ProvidersPanel } from './pages/settings/ProvidersPanel';
+import { UsagePanel } from './pages/panels/UsagePanel';
+import { AutomationsPanel } from './pages/panels/AutomationsPanel';
+import { KanbanPanel, type KanbanProject } from './pages/kanban';
+import { WorkspacePanel, type WorkspaceDraftPrefill, type WorkspaceSectionId } from './pages/panels/WorkspacePanel';
 import {
   getKanbanLinkedThreadIds,
   listRunningKanbanIssueRuns,
   updateKanbanIssueExecution,
   updateKanbanIssueRun,
   type KanbanExecutionState,
-} from './lib/kanbanDb';
-import { WindowControls } from './components/WindowControls';
-import { HistoryPanel } from './components/HistoryPanel';
-import { SkillsView } from './components/SkillsView';
-import { SettingsView } from './components/SettingsView';
+} from './lib/db/kanbanDb';
+import { WindowControls } from './pages/layout/WindowControls';
+import { HistoryPanel } from './pages/panels/HistoryPanel';
+import { SkillsView } from './pages/settings/SkillsView';
+import { SettingsView } from './pages/settings/SettingsView';
 import {
   type ThemeMode, type ApprovalPolicyValue, type SandboxModeValue, type AutonomyModeValue,
   type RateLimitSnapshotState, type RateLimitWindowState, type CreditsSnapshotState,
@@ -77,7 +77,7 @@ import {
   deriveAutonomyModeFromConfig, formatAutonomyModeLabel, getAutonomyModeSummary,
   applyThemeConfig, applyFontSizes,
   resolveThemeVariant, getDefaultThemeConfig, hexAlpha, mixHex,
-} from './lib/settingsHelpers';
+} from './lib/utils/settingsHelpers';
 
 type ReasoningLevel = 'low' | 'medium' | 'high' | 'xhigh';
 type StartAutomationThreadOptions = { revealThread?: boolean; toast?: boolean };
@@ -337,7 +337,7 @@ function getBlockedCodexModelMessage(modelId: string, fallbackModel?: string): s
 
 const appWindow = getCurrentWindow();
 const LazyRightSidebar = lazy(async () => {
-  const module = await import('./components/RightSidebar');
+  const module = await import('./pages/panels/RightSidebar');
   return { default: module.RightSidebar };
 });
 
@@ -1297,7 +1297,7 @@ export function App() {
   const [gitInfo, setGitInfo] = useState<{ branch: string; isDirty: boolean; addedLines: number; removedLines: number; ahead: number; behind: number; lastCommitSha?: string; lastCommitMsg?: string } | null>(null);
 
   const [historySearchQuery, setHistorySearchQuery] = useState('');
-  const [historyEntries, setHistoryEntries] = useState<import('./lib/db').ChatHistoryEntry[]>([]);
+  const [historyEntries, setHistoryEntries] = useState<import('./lib/db/db').ChatHistoryEntry[]>([]);
   const [pinnedThreads, setPinnedThreads] = usePersistedState<string[]>('codex-pinned-threads', []);
   const [threadCtxMenu, setThreadCtxMenu] = useState<{ threadId: string; x: number; y: number } | null>(null);
 

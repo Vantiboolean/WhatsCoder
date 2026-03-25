@@ -5,7 +5,7 @@ import {
   THEME_PRESETS, DEFAULT_THEME_PRESET,
   applyThemeConfig, applyFontSizes, resolveThemeVariant,
   getDefaultThemeConfig,
-} from '../lib/settingsHelpers';
+} from '../lib/utils/settingsHelpers';
 
 function applyThemeToDOM(mode: ThemeMode) {
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
