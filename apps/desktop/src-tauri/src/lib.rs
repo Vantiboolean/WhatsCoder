@@ -74,11 +74,21 @@ fn start_codex_server(
 
     let child = if cfg!(target_os = "windows") {
         Command::new("cmd")
-            .args(["/C", &binary, "app-server", "--listen", &listen_url])
+            .args([
+                "/C", &binary, "app-server",
+                "--listen", &listen_url,
+                "--session-source", "desktop",
+            ])
+            .env("CODEX_DESKTOP", "1")
             .spawn()
     } else {
         Command::new(&binary)
-            .args(["app-server", "--listen", &listen_url])
+            .args([
+                "app-server",
+                "--listen", &listen_url,
+                "--session-source", "desktop",
+            ])
+            .env("CODEX_DESKTOP", "1")
             .spawn()
     }
     .map_err(|e| {
