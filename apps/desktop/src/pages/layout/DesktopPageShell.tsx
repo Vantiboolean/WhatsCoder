@@ -35,9 +35,9 @@ export function DesktopPageShell({
       <header className="desktop-page-shell__header" data-tauri-drag-region>
         <div className="desktop-page-shell__header-left" data-tauri-drag-region>
           {title ? <span className="desktop-page-shell__header-title">{title}</span> : null}
-          {actions ? <div className="desktop-page-shell__actions" style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}>{actions}</div> : null}
         </div>
         <div className="desktop-page-shell__header-drag" data-tauri-drag-region />
+        {actions ? <div className="desktop-page-shell__actions" style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}>{actions}</div> : null}
         {windowControls ? (
           <div className="desktop-page-shell__header-controls">
             {windowControls}

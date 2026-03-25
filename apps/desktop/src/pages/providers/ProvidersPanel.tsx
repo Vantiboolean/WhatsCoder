@@ -237,50 +237,43 @@ export function ProvidersPanel({ onToast, windowControls }: Props) {
   return (
     <DesktopPageShell
       className="providers-panel"
-      title={t('providers.title')}
-      windowControls={windowControls}
-      toolbar={(
-        <div className="providers-tabs-row">
-          <div className="providers-tabs">
+      title={(
+        <div className="topnav-title-with-tabs">
+          <span>{t('providers.title')}</span>
+          <div className="topnav-segmented">
             <button
-              className={`providers-tab${activeApp === 'claude' ? ' providers-tab--active' : ''}`}
+              className={`topnav-segmented__btn${activeApp === 'claude' ? ' topnav-segmented__btn--active' : ''}`}
               onClick={() => handleSwitchApp('claude')}
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="8" cy="8" r="6" />
-                <path d="M5.5 8.5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5" />
-              </svg>
               {t('providers.claude')}
             </button>
             <button
-              className={`providers-tab${activeApp === 'codex' ? ' providers-tab--active' : ''}`}
+              className={`topnav-segmented__btn${activeApp === 'codex' ? ' topnav-segmented__btn--active' : ''}`}
               onClick={() => handleSwitchApp('codex')}
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="10" height="10" rx="2" />
-                <path d="M6 6l4 4M10 6l-4 4" />
-              </svg>
               {t('providers.codex')}
-            </button>
-          </div>
-          <div className="providers-toolbar">
-            <button className="providers-toolbar-btn providers-toolbar-btn--primary" onClick={() => setDialogOpen(true)}>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <line x1="8" y1="3" x2="8" y2="13" /><line x1="3" y1="8" x2="13" y2="8" />
-              </svg>
-              {t('common.add')}
-            </button>
-            <button className="providers-toolbar-btn" onClick={handleImportCurrent}>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M8 3v7M5 7l3 3 3-3" /><path d="M3 12h10" />
-              </svg>
-              {t('common.import')}
             </button>
           </div>
         </div>
       )}
+      windowControls={windowControls}
+      actions={(
+        <>
+          <button className="topnav-btn topnav-btn--primary" onClick={() => setDialogOpen(true)}>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <line x1="8" y1="3" x2="8" y2="13" /><line x1="3" y1="8" x2="13" y2="8" />
+            </svg>
+            {t('common.add')}
+          </button>
+          <button className="topnav-btn" onClick={handleImportCurrent}>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 3v7M5 7l3 3 3-3" /><path d="M3 12h10" />
+            </svg>
+            {t('common.import')}
+          </button>
+        </>
+      )}
     >
-      <div className="desktop-page-surface desktop-page-surface--scroll">
         <div className="providers-list">
           {providers.length === 0 ? (
             <DesktopEmptyState
@@ -310,7 +303,6 @@ export function ProvidersPanel({ onToast, windowControls }: Props) {
             ))
           )}
         </div>
-      </div>
 
       <ProviderDialog
         open={dialogOpen}

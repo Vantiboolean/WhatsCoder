@@ -32,34 +32,32 @@ export function SkillsView({ skills, onRefresh, windowControls }: { skills: Skil
       className="skills-panel"
       title="Skills"
       windowControls={windowControls}
-      toolbar={(
-        <div className="providers-toolbar providers-toolbar--spread">
-          <div className="history-toolbar-search">
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      actions={(
+        <>
+          <div className="topnav-search">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="7" cy="7" r="5" /><path d="M11 11l3.5 3.5" />
             </svg>
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search skills..." />
             {search && (
-              <button className="history-search-clear" onClick={() => setSearch('')}>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <button className="topnav-search__clear" onClick={() => setSearch('')}>
+                <svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                   <line x1="2" y1="2" x2="8" y2="8" /><line x1="8" y1="2" x2="2" y2="8" />
                 </svg>
               </button>
             )}
           </div>
           {onRefresh && (
-            <button className="providers-toolbar-btn" onClick={onRefresh}>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+            <button className="topnav-icon-btn" onClick={onRefresh} title="Refresh">
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M1.5 7a5.5 5.5 0 0 1 9.3-4" /><path d="M12.5 7a5.5 5.5 0 0 1-9.3 4" />
                 <polyline points="11,1 11,4 8,4" /><polyline points="3,13 3,10 6,10" />
               </svg>
-              Refresh
             </button>
           )}
-        </div>
+        </>
       )}
     >
-      <div className="desktop-page-surface desktop-page-surface--scroll">
         <div className="providers-list">
           {filtered.length === 0 ? (
             <DesktopEmptyState
@@ -124,7 +122,6 @@ export function SkillsView({ skills, onRefresh, windowControls }: { skills: Skil
             ))
           )}
         </div>
-      </div>
     </DesktopPageShell>
   );
 }

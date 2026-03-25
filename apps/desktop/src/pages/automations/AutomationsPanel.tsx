@@ -616,8 +616,7 @@ export function AutomationsPanel({
           </div>
         )}
 
-        <div className="desktop-page-surface desktop-page-surface--scroll">
-          <div className="automations-editor">
+        <div className="automations-editor">
             <form onSubmit={e => { e.preventDefault(); void handleSave(); }}>
             {/* Name */}
             <div className="automations-field">
@@ -900,7 +899,6 @@ export function AutomationsPanel({
             )}
             </form>
           </div>
-        </div>
       </DesktopPageShell>
     );
   }
@@ -915,7 +913,6 @@ export function AutomationsPanel({
         windowControls={windowControls}
       >
         {panelErrorBanner}
-        <div className="desktop-page-surface desktop-page-surface--scroll">
           <div className="automations-templates-body">
           {TEMPLATE_SECTIONS.map(section => {
             const cards = section.cardIds.map(id => TEMPLATE_MAP.get(id)).filter(Boolean) as AutomationTemplate[];
@@ -947,7 +944,6 @@ export function AutomationsPanel({
             );
           })}
           </div>
-        </div>
       </DesktopPageShell>
     );
   }
@@ -976,14 +972,11 @@ export function AutomationsPanel({
       {panelErrorBanner}
 
       {loading ? (
-        <div className="desktop-page-surface">
           <div className="automations-loading">
             <svg className="automations-spinner" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="28 20"/></svg>
             <span>{t('common.loading')}</span>
           </div>
-        </div>
       ) : automations.length === 0 ? (
-        <div className="desktop-page-surface">
           <div className="automations-empty">
             <DesktopEmptyState
               icon={(
@@ -1024,9 +1017,7 @@ export function AutomationsPanel({
               })}
             </div>
           </div>
-        </div>
       ) : (
-        <div className="desktop-page-surface desktop-page-surface--scroll">
           <div className="automations-list">
             {automations.map(row => (
               <div
@@ -1111,7 +1102,6 @@ export function AutomationsPanel({
               </div>
             ))}
           </div>
-        </div>
       )}
     </DesktopPageShell>
   );

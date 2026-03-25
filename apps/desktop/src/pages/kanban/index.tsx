@@ -796,7 +796,6 @@ export const KanbanPanel = memo(function KanbanPanel({
         title={t('kanban.title')}
         windowControls={windowControls}
       >
-        <div className="desktop-page-surface">
           <DesktopEmptyState
             icon={(
               <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -808,7 +807,6 @@ export const KanbanPanel = memo(function KanbanPanel({
             title={t('kanban.noProjects')}
             description={t('kanban.noProjectsHint')}
           />
-        </div>
       </DesktopPageShell>
     );
   }

@@ -983,7 +983,6 @@ export const WorkspacePanel = memo(function WorkspacePanel({
         title={t('workspacePage.title')}
         windowControls={windowControls}
       >
-        <div className="desktop-page-surface">
           <DesktopEmptyState
             icon={(
               <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -999,7 +998,6 @@ export const WorkspacePanel = memo(function WorkspacePanel({
             title={t('workspacePage.noProjects')}
             description={t('workspacePage.noProjectsHint')}
           />
-        </div>
       </DesktopPageShell>
     );
   }

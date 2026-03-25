@@ -81,31 +81,28 @@ export function HistoryPanel({
       className="history-panel"
       title="History"
       windowControls={windowControls}
-      toolbar={(
-        <div className="providers-toolbar">
-          <div className="history-toolbar-search">
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <circle cx="7" cy="7" r="5" />
-              <path d="M11 11l3.5 3.5" />
-            </svg>
-            <input
-              value={searchQuery}
-              onChange={(event) => onSearchChange(event.target.value)}
-              placeholder="Search history..."
-            />
-            {searchQuery ? (
-              <button className="history-search-clear" onClick={() => onSearchChange('')}>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                  <line x1="2" y1="2" x2="8" y2="8" />
-                  <line x1="8" y1="2" x2="2" y2="8" />
-                </svg>
-              </button>
-            ) : null}
-          </div>
+      actions={(
+        <div className="topnav-search">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <circle cx="7" cy="7" r="5" />
+            <path d="M11 11l3.5 3.5" />
+          </svg>
+          <input
+            value={searchQuery}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder="Search history..."
+          />
+          {searchQuery ? (
+            <button className="topnav-search__clear" onClick={() => onSearchChange('')}>
+              <svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <line x1="2" y1="2" x2="8" y2="8" />
+                <line x1="8" y1="2" x2="2" y2="8" />
+              </svg>
+            </button>
+          ) : null}
         </div>
       )}
     >
-      <div className="desktop-page-surface desktop-page-surface--scroll">
         <div className="providers-list">
           {entries.length === 0 ? (
             <DesktopEmptyState
@@ -122,7 +119,6 @@ export function HistoryPanel({
             groupedEntries.map((group) => renderGroup(group.label, group.items))
           )}
         </div>
-      </div>
     </DesktopPageShell>
   );
 }
