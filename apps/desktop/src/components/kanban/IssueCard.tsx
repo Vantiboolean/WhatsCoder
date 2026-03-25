@@ -4,7 +4,17 @@ import {
   PRIORITY_CONFIG,
   type KanbanIssue,
 } from '../../lib/kanbanDb';
+import type { WorkspaceDraftSummary } from '../../lib/workspaceDrafts';
 import { PRIORITY_I18N, EXECUTION_STATE_I18N, isDueOverdue, isDueSoon } from './kanban-helpers';
+
+const EMPTY_WORKSPACE_SUMMARY: WorkspaceDraftSummary = {
+  hasActivity: false,
+  totalSteps: 0,
+  completedSteps: 0,
+  artifactCount: 0,
+  runtimeReady: false,
+  worktreeReady: false,
+};
 
 export const IssueCard = memo(function IssueCard({
   issue,
@@ -16,7 +26,9 @@ export const IssueCard = memo(function IssueCard({
   isDragTarget,
   onExecute,
   onViewThread,
+  onOpenWorkspace,
   isExecuting,
+  workspaceSummary,
 }: {
   issue: KanbanIssue;
   commentCount: number;
@@ -27,7 +39,9 @@ export const IssueCard = memo(function IssueCard({
   isDragTarget: boolean;
   onExecute?: (issue: KanbanIssue) => void;
   onViewThread?: (issue: KanbanIssue) => void;
+  onOpenWorkspace?: (issue: KanbanIssue) => void;
   isExecuting?: boolean;
+  workspaceSummary?: WorkspaceDraftSummary | null;
 }) {
   const { t } = useTranslation();
   const [showMenu, setShowMenu] = useState(false);
@@ -36,6 +50,33 @@ export const IssueCard = memo(function IssueCard({
   const overdue = issue.due_date && issue.status !== 'done' && isDueOverdue(issue.due_date);
   const dueSoon = issue.due_date && issue.status !== 'done' && !overdue && isDueSoon(issue.due_date);
   const executionStateLabel = issue.last_run_status ? t(EXECUTION_STATE_I18N[issue.last_run_status]) : null;
+  const summary = workspaceSummary ?? EMPTY_WORKSPACE_SUMMARY;
+  const workspacePills = [
+    {
+      key: 'tasks',
+      label: t('workspacePage.summaryTasks'),
+      value: `${summary.completedSteps}/${summary.totalSteps}`,
+      tone: summary.totalSteps > 0 ? 'blue' : 'muted',
+    },
+    {
+      key: 'runtime',
+      label: t('workspacePage.summaryRuntime'),
+      value: summary.runtimeReady ? t('workspacePage.ready') : t('workspacePage.pending'),
+      tone: summary.runtimeReady ? 'green' : summary.hasActivity ? 'orange' : 'muted',
+    },
+    {
+      key: 'artifacts',
+      label: t('workspacePage.summaryArtifacts'),
+      value: summary.artifactCount.toString(),
+      tone: summary.artifactCount > 0 ? 'purple' : 'muted',
+    },
+    {
+      key: 'worktree',
+      label: t('workspacePage.summaryWorktree'),
+      value: summary.worktreeReady ? t('workspacePage.ready') : t('workspacePage.pending'),
+      tone: summary.worktreeReady ? 'green' : summary.hasActivity ? 'orange' : 'muted',
+    },
+  ] as const;
 
   return (
     <div
@@ -82,6 +123,14 @@ export const IssueCard = memo(function IssueCard({
       {issue.description && (
         <div className="kanban-card-desc">{issue.description.length > 120 ? `${issue.description.slice(0, 120)}...` : issue.description}</div>
       )}
+      <div className="kanban-card-workspace">
+        {workspacePills.map((pill) => (
+          <span key={pill.key} className={`kanban-card-workspace-pill kanban-card-workspace-pill--${pill.tone}`}>
+            <strong>{pill.value}</strong>
+            <span>{pill.label}</span>
+          </span>
+        ))}
+      </div>
       <div className="kanban-card-footer">
         <span className="kanban-card-priority" style={{ color: priority.color }}>
           <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
@@ -124,21 +173,55 @@ export const IssueCard = memo(function IssueCard({
             {commentCount}
           </span>
         )}
-        {issue.linked_thread_id ? (
-          <>
-            <button
-              className="kanban-card-exec-btn kanban-card-exec-btn--linked"
-              title={t('kanban.viewExecution')}
-              onClick={(e) => { e.stopPropagation(); onViewThread?.(issue); }}
-            >
-              <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M2 3h12v10H2z" /><path d="M5 8h6M5 6h4" />
-              </svg>
-            </button>
-            {onExecute && (
+        {(onOpenWorkspace || onExecute || (issue.linked_thread_id && onViewThread)) ? (
+          <div className="kanban-card-actions">
+            {onOpenWorkspace && (
+              <button
+                className="kanban-card-exec-btn kanban-card-exec-btn--workspace"
+                title={t('kanban.openWorkspaceTasks')}
+                onClick={(e) => { e.stopPropagation(); onOpenWorkspace(issue); }}
+              >
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="2" width="5" height="5" rx="1" />
+                  <rect x="9" y="2" width="5" height="5" rx="1" />
+                  <rect x="2" y="9" width="5" height="5" rx="1" />
+                  <path d="M11.5 9.5h2.5" />
+                  <path d="M12.75 8.25v2.5" />
+                </svg>
+              </button>
+            )}
+            {issue.linked_thread_id ? (
+              <>
+                <button
+                  className="kanban-card-exec-btn kanban-card-exec-btn--linked"
+                  title={t('kanban.viewExecution')}
+                  onClick={(e) => { e.stopPropagation(); onViewThread?.(issue); }}
+                >
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M2 3h12v10H2z" /><path d="M5 8h6M5 6h4" />
+                  </svg>
+                </button>
+                {onExecute && (
+                  <button
+                    className="kanban-card-exec-btn"
+                    title={t('kanban.rerun')}
+                    disabled={isExecuting}
+                    onClick={(e) => { e.stopPropagation(); onExecute(issue); }}
+                  >
+                    {isExecuting ? (
+                      <span className="kanban-card-exec-spinner" />
+                    ) : (
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M4 2l10 6-10 6V2z" />
+                      </svg>
+                    )}
+                  </button>
+                )}
+              </>
+            ) : onExecute ? (
               <button
                 className="kanban-card-exec-btn"
-                title={t('kanban.rerun')}
+                title={t('kanban.execute')}
                 disabled={isExecuting}
                 onClick={(e) => { e.stopPropagation(); onExecute(issue); }}
               >
@@ -150,24 +233,9 @@ export const IssueCard = memo(function IssueCard({
                   </svg>
                 )}
               </button>
-            )}
-          </>
-        ) : onExecute && (
-          <button
-            className="kanban-card-exec-btn"
-            title={t('kanban.execute')}
-            disabled={isExecuting}
-            onClick={(e) => { e.stopPropagation(); onExecute(issue); }}
-          >
-            {isExecuting ? (
-              <span className="kanban-card-exec-spinner" />
-            ) : (
-              <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M4 2l10 6-10 6V2z" />
-              </svg>
-            )}
-          </button>
-        )}
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );

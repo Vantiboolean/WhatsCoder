@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { KanbanIssue, KanbanStatus } from '../../lib/kanbanDb';
+import type { WorkspaceDraftSummary } from '../../lib/workspaceDrafts';
 import { IssueCard } from './IssueCard';
 import { QuickAddInput } from './QuickAddInput';
 
@@ -23,7 +24,9 @@ export const KanbanColumn = memo(function KanbanColumn({
   dragOverCardId,
   onExecuteIssue,
   onViewThread,
+  onOpenWorkspaceIssue,
   executingIssueIds,
+  workspaceSummaryByIssue,
 }: {
   status: KanbanStatus;
   label: string;
@@ -43,7 +46,9 @@ export const KanbanColumn = memo(function KanbanColumn({
   dragOverCardId: string | null;
   onExecuteIssue?: (issue: KanbanIssue) => void;
   onViewThread?: (issue: KanbanIssue) => void;
+  onOpenWorkspaceIssue?: (issue: KanbanIssue) => void;
   executingIssueIds?: Set<string>;
+  workspaceSummaryByIssue?: Record<string, WorkspaceDraftSummary>;
 }) {
   const { t } = useTranslation();
   const statusColors: Record<KanbanStatus, string> = {
@@ -107,7 +112,9 @@ export const KanbanColumn = memo(function KanbanColumn({
             isDragTarget={dragOverCardId === issue.id}
             onExecute={onExecuteIssue}
             onViewThread={onViewThread}
+            onOpenWorkspace={onOpenWorkspaceIssue}
             isExecuting={executingIssueIds?.has(issue.id) || issue.last_run_status === 'RUNNING'}
+            workspaceSummary={workspaceSummaryByIssue?.[issue.id] ?? null}
           />
         ))}
         {issues.length === 0 && (

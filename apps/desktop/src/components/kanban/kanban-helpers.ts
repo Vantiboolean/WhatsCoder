@@ -17,6 +17,16 @@ export type KanbanExecCallbacks = {
   startTurn: (threadId: string, text: string) => Promise<Turn>;
   readThread: (threadId: string) => Promise<ThreadDetail>;
   onRunStarted?: (params: { runId: string; issueId: string; threadId: string }) => void;
+  onThreadObserved?: (params: {
+    threadId: string;
+    detail: ThreadDetail;
+    runId?: string;
+    issueId?: string;
+  }) => Promise<void> | void;
+  setObservedThread?: (params: {
+    threadId: string | null;
+    detail?: ThreadDetail | null;
+  }) => void;
   onThreadCreated: () => void;
 };
 

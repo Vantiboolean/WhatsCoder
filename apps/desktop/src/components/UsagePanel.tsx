@@ -22,6 +22,7 @@ import {
   fmtInt,
   parseFiniteNumber,
 } from '../lib/usageDb';
+import { DesktopPageShell } from './DesktopPageShell';
 
 // ── Summary Cards ──
 
@@ -522,7 +523,7 @@ function PricingEditModal({ model, isNew, onSave, onClose }: {
 
 type DataTab = 'logs' | 'providers' | 'models';
 
-export function UsagePanel() {
+export function UsagePanel({ windowControls }: { windowControls?: import('react').ReactNode } = {}) {
   const { t } = useTranslation();
   const [timeRange, setTimeRange] = useState<TimeRange>('1d');
   const [refreshMs, setRefreshMs] = useState(30000);
@@ -632,40 +633,38 @@ export function UsagePanel() {
   }, []);
 
   return (
-    <div className="usage-panel">
-      <div className="usage-header" data-tauri-drag-region>
-        <h2>{t('usage.title')}</h2>
-      </div>
-
-      <div className="usage-toolbar">
-        <div className="usage-toolbar__left">
-          <div className="usage-range-group">
-            {(['1d', '7d', '30d'] as TimeRange[]).map(tr => (
-              <button
-                key={tr}
-                className={`usage-range-btn${timeRange === tr ? ' usage-range-btn--active' : ''}`}
-                onClick={() => { setTimeRange(tr); setLoading(true); }}
-              >
-                {tr === '1d' ? t('usage.period24h') : tr === '7d' ? t('usage.period7d') : t('usage.period30d')}
-              </button>
-            ))}
+    <DesktopPageShell
+      className="usage-panel"
+      bodyClassName="usage-panel__body"
+      title={t('usage.title')}
+      windowControls={windowControls}
+      toolbar={(
+        <div className="usage-toolbar">
+          <div className="usage-toolbar__left">
+            <div className="usage-range-group">
+              {(['1d', '7d', '30d'] as TimeRange[]).map(tr => (
+                <button
+                  key={tr}
+                  className={`usage-range-btn${timeRange === tr ? ' usage-range-btn--active' : ''}`}
+                  onClick={() => { setTimeRange(tr); setLoading(true); }}
+                >
+                  {tr === '1d' ? t('usage.period24h') : tr === '7d' ? t('usage.period7d') : t('usage.period30d')}
+                </button>
+              ))}
+            </div>
           </div>
+          <button className="usage-refresh-btn" onClick={cycleRefresh} title={t('usage.autoRefresh')}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2 2v5h5" /><path d="M4 10a5.5 5.5 0 109-2" />
+            </svg>
+            <span>{refreshMs > 0 ? `${refreshMs / 1000}s` : t('usage.off')}</span>
+          </button>
         </div>
-        <button className="usage-refresh-btn" onClick={cycleRefresh} title={t('usage.autoRefresh')}>
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2 2v5h5" /><path d="M4 10a5.5 5.5 0 109-2" />
-          </svg>
-          <span>{refreshMs > 0 ? `${refreshMs / 1000}s` : t('usage.off')}</span>
-        </button>
-      </div>
-
-      {/* Summary Cards */}
+      )}
+    >
       <SummaryCards summary={summary} loading={loading} />
-
-      {/* Trend Chart */}
       <TrendChart trends={trends} days={days} />
 
-      {/* Data Tabs */}
       <div className="usage-data-section">
         <div className="usage-tabs-bar">
           <div className="usage-tabs">
@@ -683,7 +682,6 @@ export function UsagePanel() {
               </button>
             ))}
           </div>
-          {/* Inline filter pills for logs tab */}
           {dataTab === 'logs' && (
             <div className="usage-filters">
               <select
@@ -716,7 +714,6 @@ export function UsagePanel() {
           )}
         </div>
 
-        {/* Tab Content */}
         {dataTab === 'logs' && (
           <LogsTable logs={logs.data} total={logs.total} page={logPage} pageSize={20} onPageChange={handleLogPageChange} />
         )}
@@ -724,7 +721,6 @@ export function UsagePanel() {
         {dataTab === 'models' && <ModelStatsTable stats={modelStatsList} />}
       </div>
 
-      {/* Pricing Config (Collapsible) */}
       <div className="usage-section">
         <button className="usage-collapsible" onClick={() => setPricingOpen(!pricingOpen)}>
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`usage-collapsible__chevron${pricingOpen ? ' usage-collapsible__chevron--open' : ''}`}>
@@ -734,6 +730,6 @@ export function UsagePanel() {
         </button>
         {pricingOpen && <PricingPanel pricing={pricing} onRefresh={refreshPricing} />}
       </div>
-    </div>
+    </DesktopPageShell>
   );
 }

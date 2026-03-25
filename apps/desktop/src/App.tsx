@@ -55,6 +55,7 @@ import { ProvidersPanel } from './components/ProvidersPanel';
 import { UsagePanel } from './components/UsagePanel';
 import { AutomationsPanel } from './components/AutomationsPanel';
 import { KanbanPanel, type KanbanProject } from './components/kanban';
+import { WorkspacePanel, type WorkspaceDraftPrefill, type WorkspaceSectionId } from './components/WorkspacePanel';
 import {
   getKanbanLinkedThreadIds,
   listRunningKanbanIssueRuns,
@@ -380,6 +381,16 @@ function usePersistedState<T>(key: string, defaultValue: T): [T, (v: T) => void]
   }, [key]);
 
   return [value, set];
+}
+
+function useStableCallback<T extends (...args: never[]) => unknown>(callback: T): T {
+  const callbackRef = useRef(callback);
+
+  useEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
+
+  return useCallback(((...args: Parameters<T>) => callbackRef.current(...args)) as T, []);
 }
 
 function applyTheme(mode: ThemeMode) {
@@ -1192,13 +1203,13 @@ function buildProviderTimeline(
 export function App() {
   const clientRef = useRef(new CodexClient());
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
-  const [url, setUrl] = usePersistedState('codex-ws-url', 'ws://127.0.0.1:4500');
+  const [url, setUrl] = usePersistedState('codex-ws-url', 'ws://localhost:6188/ws');
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [selectedThread, setSelectedThread] = useState<string | null>(null);
   const [threadDetail, setThreadDetail] = useState<ThreadDetail | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isAgentActive, setIsAgentActive] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; type: 'error' | 'info' } | null>(null);
+  const [toast, setToast] = useState<{ msg: string; type: 'error' | 'info'; exiting?: boolean } | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [reasoning, setReasoning] = usePersistedState<ReasoningLevel>('codex-reasoning', 'high');
@@ -1218,11 +1229,23 @@ export function App() {
   const [editNameValue, setEditNameValue] = useState('');
   const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null);
   const [renamingThreadValue, setRenamingThreadValue] = useState('');
-  const [sidebarView, setSidebarView] = useState<'threads' | 'settings' | 'automations' | 'skills' | 'usage' | 'providers' | 'history' | 'kanban'>('threads');
+  const [sidebarView, setSidebarView] = useState<'threads' | 'settings' | 'automations' | 'skills' | 'usage' | 'providers' | 'history' | 'workspace'>('threads');
+  const [workspaceSection, setWorkspaceSection] = usePersistedState<WorkspaceSectionId>('codex-workspace-panel-section-v1', 'overview');
+  const [workspacePrefill, setWorkspacePrefill] = useState<WorkspaceDraftPrefill | null>(null);
+  const [workspaceIssueContext, setWorkspaceIssueContext] = useState<{
+    projectId: string | null;
+    issueId: string | null;
+    issueLabel: string | null;
+  }>({
+    projectId: null,
+    issueId: null,
+    issueLabel: null,
+  });
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const sidebarResizing = useRef(false);
   const sidebarResizeStartX = useRef(0);
   const sidebarResizeStartWidth = useRef(0);
+  const observedKanbanThreadIdRef = useRef<string | null>(null);
   const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     sidebarResizing.current = true;
@@ -1244,6 +1267,8 @@ export function App() {
   const [showArchived, setShowArchived] = useState(false);
   const [kanbanThreadIds, setKanbanThreadIds] = useState<Set<string>>(new Set());
   const [kanbanExecutionRevision, setKanbanExecutionRevision] = useState(0);
+  const [observedKanbanThreadId, setObservedKanbanThreadId] = useState<string | null>(null);
+  const [observedKanbanThreadDetail, setObservedKanbanThreadDetail] = useState<ThreadDetail | null>(null);
   const [folderMenu, setFolderMenu] = useState<{ cwd: string; x: number; y: number } | null>(null);
   const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
   const [folderAlias, setFolderAlias] = usePersistedState<Record<string, string>>('codex-folder-aliases', {});
@@ -1392,13 +1417,20 @@ export function App() {
   useEffect(() => { setShowRawJson(false); setOverlayView(null); }, [selectedThread, sidebarView]);
 
   // Toast 鑷姩娑堝け
+  const requestDismissToast = useCallback(() => {
+    setToast(prev => {
+      if (!prev || prev.exiting) return prev;
+      return { ...prev, exiting: true };
+    });
+  }, []);
+
   useEffect(() => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    if (!toast) return;
+    if (!toast || toast.exiting) return;
     const ms = toast.type === 'error' ? 6000 : 3000;
-    toastTimerRef.current = setTimeout(() => setToast(null), ms);
+    toastTimerRef.current = setTimeout(() => requestDismissToast(), ms);
     return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
-  }, [toast]);
+  }, [toast, requestDismissToast]);
 
   // History panel: load data when switching to the history tab.
   useEffect(() => {
@@ -1659,6 +1691,11 @@ export function App() {
     [folderAlias, threadGroups],
   );
 
+  const workspaceProjects = useMemo(
+    () => automationProjects.map((project) => ({ id: project.cwd, name: project.label })),
+    [automationProjects],
+  );
+
   const kanbanProjects = useMemo<KanbanProject[]>(() => {
     const cwdMap = new Map<string, string>();
     for (const t of threads) {
@@ -1678,6 +1715,15 @@ export function App() {
       const ids = await getKanbanLinkedThreadIds();
       setKanbanThreadIds(ids);
     } catch { /* ignore */ }
+  }, []);
+
+  const setObservedKanbanThread = useCallback((params: {
+    threadId: string | null;
+    detail?: ThreadDetail | null;
+  }) => {
+    observedKanbanThreadIdRef.current = params.threadId;
+    setObservedKanbanThreadId(params.threadId);
+    setObservedKanbanThreadDetail(params.detail ?? null);
   }, []);
 
   const clearKanbanRunPoll = useCallback((runId: string) => {
@@ -1720,6 +1766,33 @@ export function App() {
     return true;
   }, []);
 
+  const handleKanbanThreadObserved = useCallback(async (params: {
+    threadId: string;
+    detail: ThreadDetail;
+    runId?: string;
+    issueId?: string;
+  }) => {
+    if (observedKanbanThreadIdRef.current === params.threadId) {
+      setObservedKanbanThreadDetail(params.detail);
+    }
+    if (params.runId && params.issueId) {
+      await syncKanbanRunFromThread({
+        runId: params.runId,
+        issueId: params.issueId,
+        detail: params.detail,
+      });
+    }
+  }, [syncKanbanRunFromThread]);
+
+  const readKanbanThreadDetail = useCallback(async (threadId: string) => {
+    try {
+      await clientRef.current.resumeThread(threadId);
+    } catch {
+      /* thread may already be loaded */
+    }
+    return clientRef.current.readThread(threadId, true);
+  }, []);
+
   const startKanbanRunPolling = useCallback((params: {
     runId: string;
     issueId: string;
@@ -1728,7 +1801,10 @@ export function App() {
     if (kanbanRunPollsRef.current.has(params.runId)) return;
     const interval = setInterval(async () => {
       try {
-        const detail = await clientRef.current.readThread(params.threadId);
+        const detail = await readKanbanThreadDetail(params.threadId);
+        if (observedKanbanThreadIdRef.current === params.threadId) {
+          setObservedKanbanThreadDetail(detail);
+        }
         const settled = await syncKanbanRunFromThread({
           runId: params.runId,
           issueId: params.issueId,
@@ -1742,7 +1818,7 @@ export function App() {
       }
     }, 3000);
     kanbanRunPollsRef.current.set(params.runId, interval);
-  }, [clearKanbanRunPoll, syncKanbanRunFromThread]);
+  }, [clearKanbanRunPoll, readKanbanThreadDetail, syncKanbanRunFromThread]);
 
   const reconcileKanbanRunPolls = useCallback(async () => {
     try {
@@ -2629,25 +2705,20 @@ export function App() {
   const extractPort = useCallback((wsUrl: string): number => {
     try {
       const u = new URL(wsUrl);
+      if (u.pathname === '/ws' || u.pathname === '/ws/') return 4500;
       return parseInt(u.port, 10) || 4500;
     } catch {
       return 4500;
     }
   }, []);
 
-  const waitForServerReady = useCallback(async (wsUrl: string, maxAttempts = 20, delayMs = 500): Promise<boolean> => {
+  const waitForServerReady = useCallback(async (_wsUrl: string, maxAttempts = 20, delayMs = 500): Promise<boolean> => {
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        await new Promise<void>((resolve, reject) => {
-          const ws = new WebSocket(wsUrl);
-          const timer = setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 2000);
-          ws.onopen = () => { clearTimeout(timer); ws.close(); resolve(); };
-          ws.onerror = () => { clearTimeout(timer); ws.close(); reject(new Error('error')); };
-        });
-        return true;
-      } catch {
-        await new Promise(r => setTimeout(r, delayMs));
-      }
+        const res = await fetch('/readyz', { method: 'GET', signal: AbortSignal.timeout(2000) });
+        if (res.ok) return true;
+      } catch { /* retry */ }
+      await new Promise(r => setTimeout(r, delayMs));
     }
     return false;
   }, []);
@@ -4394,6 +4465,15 @@ export function App() {
     threadDetail,
   ]);
 
+  const handleSelectModelStable = useStableCallback(handleSelectModel);
+  const handleSelectReasoningStable = useStableCallback((value: string) => {
+    setReasoning(value as ReasoningLevel);
+  });
+  const handleAutonomyModeChangeStable = useStableCallback(handleAutonomyModeChange);
+  const handleComposerSubmitStable = useStableCallback(handleComposerSubmit);
+  const handleComposerCommandStable = useStableCallback(handleComposerCommand);
+  const handleInterruptStable = useStableCallback(handleInterrupt);
+
   const toggleGroup = useCallback((cwd: string) => {
     setCollapsedGroups(prev => {
       const next = new Set(prev);
@@ -5013,9 +5093,37 @@ export function App() {
   const handleOpenHistoryView = useCallback(() => {
     setSidebarView('history');
   }, []);
-  const handleOpenKanbanView = useCallback(() => {
-    setSidebarView('kanban');
+  const handleOpenWorkspaceView = useCallback(() => {
+    setSidebarView('workspace');
   }, []);
+  const handleOpenWorkspaceSection = useCallback((section: WorkspaceSectionId) => {
+    setWorkspaceSection(section);
+    setSidebarView('workspace');
+  }, [setWorkspaceSection]);
+  const handleSelectWorkspaceProject = useCallback((projectId: string) => {
+    setActiveProjectCwd(projectId);
+    setWorkspaceIssueContext({
+      projectId: null,
+      issueId: null,
+      issueLabel: null,
+    });
+    setWorkspacePrefill(null);
+  }, []);
+  const handleOpenWorkspaceFromKanban = useCallback((params: {
+    projectId: string;
+    section: WorkspaceSectionId;
+    prefill?: WorkspaceDraftPrefill;
+  }) => {
+    setActiveProjectCwd(params.projectId);
+    setWorkspaceIssueContext({
+      projectId: params.prefill?.issueId ? params.projectId : null,
+      issueId: params.prefill?.issueId ?? null,
+      issueLabel: params.prefill?.issueLabel ?? params.prefill?.linkedIssue ?? null,
+    });
+    setWorkspaceSection(params.section);
+    setWorkspacePrefill(params.prefill ?? null);
+    setSidebarView('workspace');
+  }, [setWorkspaceSection]);
   const handleOpenSettingsView = useCallback(() => {
     setSidebarView('settings');
   }, []);
@@ -5268,21 +5376,21 @@ export function App() {
             skills={skills}
             modelOptions={modelSelectOptions}
             selectedModel={selectedModel}
-            onSelectModel={handleSelectModel}
+            onSelectModel={handleSelectModelStable}
             modelSwitchPreview={modelSwitchPreview}
             reasoning={reasoning}
             reasoningOptions={REASONING_OPTIONS}
-            onSelectReasoning={(value) => setReasoning(value as ReasoningLevel)}
+            onSelectReasoning={handleSelectReasoningStable}
             autonomyMode={autonomyMode}
             autonomyOptions={autonomyOptions}
-            onSelectAutonomyMode={handleAutonomyModeChange}
+            onSelectAutonomyMode={handleAutonomyModeChangeStable}
             isUpdatingAutonomy={isUpdatingAutonomy}
             autonomyDetail={autonomyDetail}
             branchLabel={activeBranchLabel}
             contextUsage={contextUsage}
-            onSubmit={handleComposerSubmit}
-            onExecuteCommand={handleComposerCommand}
-            onInterrupt={isProcessing ? handleInterrupt : undefined}
+            onSubmit={handleComposerSubmitStable}
+            onExecuteCommand={handleComposerCommandStable}
+            onInterrupt={isProcessing ? handleInterruptStable : undefined}
             backendType={isClaudeModel(selectedModel) ? 'claude' : 'codex'}
           />
         </div>
@@ -5300,29 +5408,30 @@ export function App() {
     composerPlaceholder,
     contextUsage,
     displayedThread,
-    handleApproval,
-    handleAuthRefreshReject,
-    handleAuthRefreshResponse,
-    handleAutonomyModeChange,
-    handleComposerCommand,
-    handleComposerSubmit,
-    handleDynamicToolCallReject,
-    handleDynamicToolCallResponse,
-    handleInterrupt,
-    handleMcpElicitationResponse,
-    handleResendToComposer,
-    handleSelectModel,
-    handleUserInputCancel,
-    handleUserInputResponse,
-    isAgentActive,
+      handleApproval,
+      handleAuthRefreshReject,
+      handleAuthRefreshResponse,
+      handleAutonomyModeChangeStable,
+      handleComposerCommandStable,
+      handleComposerSubmitStable,
+      handleDynamicToolCallReject,
+      handleDynamicToolCallResponse,
+      handleInterruptStable,
+      handleMcpElicitationResponse,
+      handleResendToComposer,
+      handleSelectModelStable,
+      handleSelectReasoningStable,
+      handleUserInputCancel,
+      handleUserInputResponse,
+      isAgentActive,
     isProcessing,
     isSelectedThreadTurnsLoading,
     isSending,
     isShowingPreviousThreadWhileLoading,
     isUpdatingAutonomy,
-    modelSwitchPreview,
-    modelSelectOptions,
-    reasoning,
+      modelSwitchPreview,
+      modelSelectOptions,
+      reasoning,
     rightSidebarEl,
     selectedModel,
     selectedThread,
@@ -5356,7 +5465,7 @@ export function App() {
           onOpenUsage={handleOpenUsageView}
           onOpenProviders={handleOpenProvidersView}
           onOpenHistory={handleOpenHistoryView}
-          onOpenKanban={handleOpenKanbanView}
+          onOpenWorkspace={handleOpenWorkspaceView}
           onOpenSettings={handleOpenSettingsView}
           onAddProject={handleAddProject}
           showArchived={showArchived}
@@ -5410,11 +5519,10 @@ export function App() {
 
         {/* Main Content */}
         <main className="main-content">
-          {(sidebarView === 'settings' || sidebarView === 'providers' || sidebarView === 'automations' || sidebarView === 'skills' || sidebarView === 'usage' || sidebarView === 'history' || sidebarView === 'kanban') && <WindowControls className="window-controls--floating" />}
           {sidebarView === 'settings' ? (
             <div className="main-content-body">
               <div className="main-content-primary">
-                <SettingsView url={url} onUrlChange={setUrl} connState={connState} accountInfo={accountInfo} rateLimits={rateLimits} mcpServers={mcpServers} client={clientRef.current} theme={theme} onThemeChange={setTheme} codexConfig={codexConfig} onWriteConfig={async (key, value) => { await writeConfigValueWithFallback(key, null, value); await refreshCodexConfig(); }} onRefreshMcp={refreshMcpServers} onConnect={(wsUrl) => void handleConnect(wsUrl)} onDisconnect={handleDisconnect} uiFontSize={uiFontSize} onUiFontSizeChange={setUiFontSize} codeFontSize={codeFontSize} onCodeFontSizeChange={setCodeFontSize} notificationPref={notificationPref} onNotificationPrefChange={setNotificationPref} themePreset={themePreset} onThemePresetChange={setThemePreset} themeConfig={themeConfig} onThemeConfigChange={setThemeConfig} pointerCursor={pointerCursor} onPointerCursorChange={setPointerCursor} onAutonomyModeChange={handleAutonomyModeChange} autonomyMode={autonomyMode} isUpdatingAutonomy={isUpdatingAutonomy} serverStarting={serverStarting} serverRunning={serverRunning} serverLog={serverLog} codexBinPath={codexBinPath} onCodexBinPathChange={setCodexBinPath} codexCandidates={codexCandidates} onStartServer={handleStartServer} onStopServer={handleStopServer} onBrowseCodexBinary={handleBrowseCodexBinary} />
+                <SettingsView url={url} onUrlChange={setUrl} connState={connState} accountInfo={accountInfo} rateLimits={rateLimits} mcpServers={mcpServers} client={clientRef.current} theme={theme} onThemeChange={setTheme} codexConfig={codexConfig} onWriteConfig={async (key, value) => { await writeConfigValueWithFallback(key, null, value); await refreshCodexConfig(); }} onRefreshMcp={refreshMcpServers} onConnect={(wsUrl) => void handleConnect(wsUrl)} onDisconnect={handleDisconnect} uiFontSize={uiFontSize} onUiFontSizeChange={setUiFontSize} codeFontSize={codeFontSize} onCodeFontSizeChange={setCodeFontSize} notificationPref={notificationPref} onNotificationPrefChange={setNotificationPref} themePreset={themePreset} onThemePresetChange={setThemePreset} themeConfig={themeConfig} onThemeConfigChange={setThemeConfig} pointerCursor={pointerCursor} onPointerCursorChange={setPointerCursor} onAutonomyModeChange={handleAutonomyModeChange} autonomyMode={autonomyMode} isUpdatingAutonomy={isUpdatingAutonomy} serverStarting={serverStarting} serverRunning={serverRunning} serverLog={serverLog} codexBinPath={codexBinPath} onCodexBinPathChange={setCodexBinPath} codexCandidates={codexCandidates} onStartServer={handleStartServer} onStopServer={handleStopServer} onBrowseCodexBinary={handleBrowseCodexBinary} windowControls={<WindowControls />} />
               </div>
               {rightSidebarEl}
             </div>
@@ -5427,6 +5535,7 @@ export function App() {
                   onExecuteAutomation={executeAutomation}
                   onAutomationsChanged={syncAutomationScheduler}
                   onOpenThread={handleReadThread}
+                  windowControls={<WindowControls />}
                 />
               </div>
               {rightSidebarEl}
@@ -5434,21 +5543,21 @@ export function App() {
           ) : sidebarView === 'skills' ? (
             <div className="main-content-body">
               <div className="main-content-primary">
-                <SkillsView skills={skills} onRefresh={async () => { await refreshSkills(); }} />
+                <SkillsView skills={skills} onRefresh={async () => { await refreshSkills(); }} windowControls={<WindowControls />} />
               </div>
               {rightSidebarEl}
             </div>
           ) : sidebarView === 'usage' ? (
             <div className="main-content-body">
               <div className="main-content-primary">
-                <UsagePanel />
+                <UsagePanel windowControls={<WindowControls />} />
               </div>
               {rightSidebarEl}
             </div>
           ) : sidebarView === 'providers' ? (
             <div className="main-content-body">
               <div className="main-content-primary">
-                <ProvidersPanel onToast={(msg, type) => setToast({ msg, type: type === 'error' ? 'error' : 'info' })} />
+                <ProvidersPanel onToast={(msg, type) => setToast({ msg, type: type === 'error' ? 'error' : 'info' })} windowControls={<WindowControls />} />
               </div>
               {rightSidebarEl}
             </div>
@@ -5464,38 +5573,56 @@ export function App() {
                     setSidebarView('threads');
                     setTimeout(() => composerRef.current?.setDraftText(msg), 100);
                   }}
+                  windowControls={<WindowControls />}
                 />
               </div>
               {rightSidebarEl}
             </div>
-          ) : sidebarView === 'kanban' ? (
+          ) : sidebarView === 'workspace' ? (
             <div className="main-content-body">
               <div className="main-content-primary">
-                <KanbanPanel
-                  projects={kanbanProjects}
-                  executionSyncVersion={kanbanExecutionRevision}
-                  executionModelLabel={kanbanExecutionModelLabel}
-                  execCallbacks={{
-                    startThread: startThreadWithConfigRecovery,
-                    startTurn: (threadId, text) => {
-                      const opts: { model?: string; reasoningEffort?: string } = {};
-                      if (selectedModel) opts.model = selectedModel;
-                      if (reasoning) opts.reasoningEffort = reasoning;
-                      return clientRef.current.startTurn(threadId, text, opts);
-                    },
-                    readThread: async (threadId) => {
-                      try {
-                        await clientRef.current.resumeThread(threadId);
-                      } catch {
-                        /* thread may already be loaded */
-                      }
-                      return clientRef.current.readThread(threadId, true);
-                    },
-                    onRunStarted: ({ runId, issueId, threadId }) => {
-                      startKanbanRunPolling({ runId, issueId, threadId });
-                    },
-                    onThreadCreated: () => { void refreshKanbanThreadIds(); void handleListThreads(); },
+                <WorkspacePanel
+                  projects={workspaceProjects}
+                  activeProjectId={activeProjectCwd}
+                  activeIssueId={workspaceIssueContext.projectId === activeProjectCwd ? workspaceIssueContext.issueId : null}
+                  activeIssueLabel={workspaceIssueContext.projectId === activeProjectCwd ? workspaceIssueContext.issueLabel : null}
+                  section={workspaceSection}
+                  prefill={workspacePrefill}
+                  kanbanContent={(
+                    <KanbanPanel
+                      embedded
+                      projects={kanbanProjects}
+                      activeProjectId={activeProjectCwd}
+                      onProjectSelect={handleSelectWorkspaceProject}
+                      executionSyncVersion={kanbanExecutionRevision}
+                      executionModelLabel={kanbanExecutionModelLabel}
+                      observedThreadId={observedKanbanThreadId}
+                      observedThreadDetail={observedKanbanThreadDetail}
+                      onOpenWorkspace={handleOpenWorkspaceFromKanban}
+                      execCallbacks={{
+                        startThread: startThreadWithConfigRecovery,
+                        startTurn: (threadId, text) => {
+                          const opts: { model?: string; reasoningEffort?: string } = {};
+                          if (selectedModel) opts.model = selectedModel;
+                          if (reasoning) opts.reasoningEffort = reasoning;
+                          return clientRef.current.startTurn(threadId, text, opts);
+                        },
+                        readThread: readKanbanThreadDetail,
+                        onRunStarted: ({ runId, issueId, threadId }) => {
+                          startKanbanRunPolling({ runId, issueId, threadId });
+                        },
+                        onThreadObserved: handleKanbanThreadObserved,
+                        setObservedThread: setObservedKanbanThread,
+                        onThreadCreated: () => { void refreshKanbanThreadIds(); void handleListThreads(); },
+                      }}
+                    />
+                  )}
+                  onPrefillConsumed={(seedId) => {
+                    setWorkspacePrefill((current) => (current?.seedId === seedId ? null : current));
                   }}
+                  onSectionChange={setWorkspaceSection}
+                  onProjectSelect={handleSelectWorkspaceProject}
+                  windowControls={<WindowControls />}
                 />
               </div>
               {rightSidebarEl}
@@ -5758,20 +5885,20 @@ export function App() {
                     skills={skills}
                     modelOptions={modelSelectOptions}
                     selectedModel={selectedModel}
-                    onSelectModel={handleSelectModel}
+                    onSelectModel={handleSelectModelStable}
                     modelSwitchPreview={modelSwitchPreview}
                     reasoning={reasoning}
                     reasoningOptions={REASONING_OPTIONS}
-                    onSelectReasoning={(value) => setReasoning(value as ReasoningLevel)}
+                    onSelectReasoning={handleSelectReasoningStable}
                     autonomyMode={autonomyMode}
                     autonomyOptions={autonomyOptions}
-                    onSelectAutonomyMode={handleAutonomyModeChange}
+                    onSelectAutonomyMode={handleAutonomyModeChangeStable}
                     isUpdatingAutonomy={isUpdatingAutonomy}
                     autonomyDetail={autonomyDetail}
                     branchLabel={emptyBranchLabel}
                     contextUsage={null}
-                    onSubmit={handleComposerSubmit}
-                    onExecuteCommand={handleComposerCommand}
+                    onSubmit={handleComposerSubmitStable}
+                    onExecuteCommand={handleComposerCommandStable}
                     backendType={isClaudeModel(selectedModel) ? 'claude' : 'codex'}
                   />
                   {/*
@@ -6031,9 +6158,22 @@ export function App() {
       )}
 
       {toast && (
-        <div className={`toast toast--${toast.type}`} onClick={() => setToast(null)}>
+        <div
+          className={`toast toast--${toast.type}${toast.exiting ? ' toast--exiting' : ''}`}
+          onClick={requestDismissToast}
+          onAnimationEnd={(e) => {
+            if (e.animationName === 'toastOut') setToast(null);
+          }}
+        >
           <span>{toast.msg}</span>
-          <button className="toast-close" onClick={() => setToast(null)}>
+          <button
+            type="button"
+            className="toast-close"
+            onClick={(ev) => {
+              ev.stopPropagation();
+              requestDismissToast();
+            }}
+          >
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
               <line x1="2" y1="2" x2="8" y2="8" /><line x1="8" y1="2" x2="2" y2="8" />
             </svg>
@@ -6786,4 +6926,3 @@ function DynamicToolCallModal({
 }
 
 /* Old AutomationsView removed - replaced by AutomationsPanel component */
-

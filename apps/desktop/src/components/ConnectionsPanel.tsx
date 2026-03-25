@@ -68,13 +68,6 @@ export function ConnectionsPanel({ currentUrl, connState, onConnect, onDisconnec
     setShowAdd(true);
   };
 
-  const inputStyle: React.CSSProperties = {
-    width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12,
-    background: 'var(--bg-secondary)', color: 'var(--text-primary)',
-    border: '1px solid var(--border-default)', borderRadius: 6,
-    padding: '6px 10px', boxSizing: 'border-box',
-  };
-
   return (
     <div className="settings-panel">
       <h2>Connections</h2>
@@ -82,57 +75,57 @@ export function ConnectionsPanel({ currentUrl, connState, onConnect, onDisconnec
 
       <div className="settings-section">
         <h3>Server</h3>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <div className="conn-status-row">
           <span className={`sidebar-conn-dot sidebar-conn-dot--${connState === 'connected' ? 'connected' : serverRunning ? 'connecting' : 'disconnected'}`} />
-          <span style={{ fontSize: 13, fontWeight: 500 }}>
+          <span className="conn-status-title">
             {connState === 'connected' ? 'Connected' : serverStarting ? 'Starting...' : serverRunning ? 'Running (not connected)' : 'Stopped'}
           </span>
         </div>
         {serverLog && (
-          <code style={{ display: 'block', fontSize: 11, color: 'var(--text-tertiary)', background: 'var(--bg-secondary)', borderRadius: 6, padding: '6px 10px', marginBottom: 10, wordBreak: 'break-all' }}>{serverLog}</code>
+          <code className="conn-log-display">{serverLog}</code>
         )}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+        <div className="conn-field-stack">
           <div>
-            <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Binary Path</label>
-            <div style={{ display: 'flex', gap: 4 }}>
+            <label className="conn-field-label">Binary Path</label>
+            <div className="conn-input-row">
               <input
-                style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '6px 10px', boxSizing: 'border-box' as const }}
+                className="conn-input conn-input--flex"
                 placeholder="codex (from PATH)"
                 value={codexBinPath ?? ''}
                 onChange={e => onCodexBinPathChange?.(e.target.value)}
                 spellCheck={false}
               />
               {onBrowseCodexBinary && (
-                <button className="btn-small" onClick={onBrowseCodexBinary} title="Browse for codex binary" style={{ fontSize: 11, flexShrink: 0 }}>Browse</button>
+                <button className="btn-small" onClick={onBrowseCodexBinary} title="Browse for codex binary">Browse</button>
               )}
             </div>
           </div>
           <div>
-            <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Endpoint</label>
-            <code style={{ fontSize: 12, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{currentUrl}</code>
+            <label className="conn-field-label">Endpoint</label>
+            <code className="conn-url-display">{currentUrl}</code>
           </div>
         </div>
         {codexCandidates && codexCandidates.length > 0 && !serverRunning && !serverStarting && (
-          <div style={{ marginBottom: 10 }}>
-            <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Detected Binaries</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div className="conn-candidates-block">
+            <label className="conn-field-label">Detected Binaries</label>
+            <div className="conn-candidate-list">
               {codexCandidates.map(p => (
-                <button key={p} className="btn-small" style={{ fontSize: 11, textAlign: 'left', justifyContent: 'flex-start' }} onClick={() => onCodexBinPathChange?.(p)} title={p}>
+                <button key={p} className="btn-small conn-candidate-btn" onClick={() => onCodexBinPathChange?.(p)} title={p}>
                   {p}
                 </button>
               ))}
             </div>
           </div>
         )}
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="conn-actions-row">
           {!serverRunning && !serverStarting && onStartServer && (
-            <button className="btn-small btn-primary" onClick={onStartServer} style={{ fontSize: 11 }}>Start Server</button>
+            <button className="btn-small btn-primary" onClick={onStartServer}>Start Server</button>
           )}
           {serverRunning && onStopServer && (
-            <button className="btn-small" onClick={onStopServer} style={{ fontSize: 11 }}>Stop Server</button>
+            <button className="btn-small" onClick={onStopServer}>Stop Server</button>
           )}
           {serverRunning && connState !== 'connected' && (
-            <button className="btn-small btn-primary" onClick={() => onConnect(currentUrl)} style={{ fontSize: 11 }}>Reconnect</button>
+            <button className="btn-small btn-primary" onClick={() => onConnect(currentUrl)}>Reconnect</button>
           )}
         </div>
       </div>
@@ -144,34 +137,34 @@ export function ConnectionsPanel({ currentUrl, connState, onConnect, onDisconnec
             const wsUrl = buildUrl(c);
             const isConnected = connectedUrl === wsUrl;
             return (
-              <div key={c.id} className="settings-row" style={{ alignItems: 'center', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+              <div key={c.id} className="settings-row conn-saved-row">
+                <div className="conn-saved-main">
                   <span className={`sidebar-conn-dot sidebar-conn-dot--${isConnected ? 'connected' : 'disconnected'}`} />
-                  <div style={{ minWidth: 0, overflow: 'hidden' }}>
-                    <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div className="conn-saved-text-wrap">
+                    <div className="conn-saved-label">
                       {c.label}
-                      {c.is_default ? <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 6 }}>DEFAULT</span> : null}
+                      {c.is_default ? <span className="conn-default-badge">DEFAULT</span> : null}
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{wsUrl}</div>
+                    <div className="conn-saved-url">{wsUrl}</div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                <div className="conn-saved-actions">
                   {isConnected ? (
-                    <button className="btn-small" onClick={onDisconnect} style={{ fontSize: 11 }}>Disconnect</button>
+                    <button className="btn-small" onClick={onDisconnect}>Disconnect</button>
                   ) : (
-                    <button className="btn-small btn-primary" onClick={() => onConnect(wsUrl)} style={{ fontSize: 11 }}>Connect</button>
+                    <button className="btn-small btn-primary" onClick={() => onConnect(wsUrl)}>Connect</button>
                   )}
-                  <button className="btn-small" onClick={() => startEdit(c)} style={{ fontSize: 11 }}>Edit</button>
+                  <button className="btn-small" onClick={() => startEdit(c)}>Edit</button>
                   {!c.is_default && (
-                    <button className="btn-small" onClick={() => handleSetDefault(c.id)} style={{ fontSize: 11 }}>Set Default</button>
+                    <button className="btn-small" onClick={() => handleSetDefault(c.id)}>Set Default</button>
                   )}
                   {confirmDelete === c.id ? (
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      <button className="btn-small" style={{ fontSize: 11, color: 'var(--status-error)' }} onClick={() => handleDelete(c.id)}>Confirm</button>
-                      <button className="btn-small" style={{ fontSize: 11 }} onClick={() => setConfirmDelete(null)}>Cancel</button>
+                    <div className="conn-confirm-row">
+                      <button className="btn-small conn-btn-danger-text" onClick={() => handleDelete(c.id)}>Confirm</button>
+                      <button className="btn-small" onClick={() => setConfirmDelete(null)}>Cancel</button>
                     </div>
                   ) : (
-                    <button className="btn-small" onClick={() => setConfirmDelete(c.id)} style={{ fontSize: 11 }}>&times;</button>
+                    <button className="btn-small" onClick={() => setConfirmDelete(c.id)}>&times;</button>
                   )}
                 </div>
               </div>
@@ -180,7 +173,7 @@ export function ConnectionsPanel({ currentUrl, connState, onConnect, onDisconnec
         </div>
       ) : (
         <div className="empty-section-card">
-          <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
+          <span className="conn-empty-hint">
             No saved connections. Add one below to get started.
           </span>
         </div>
@@ -190,22 +183,22 @@ export function ConnectionsPanel({ currentUrl, connState, onConnect, onDisconnec
         {showAdd ? (
           <>
             <h3>{editingId ? 'Edit Connection' : 'Add Connection'}</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="conn-form-stack">
               <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Label</label>
-                <input style={inputStyle} value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Local Server" />
+                <label className="conn-field-label">Label</label>
+                <input className="conn-input" value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Local Server" />
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Host</label>
-                  <input style={inputStyle} value={host} onChange={e => setHost(e.target.value)} placeholder="127.0.0.1" />
+              <div className="conn-host-port-row">
+                <div className="conn-host-field">
+                  <label className="conn-field-label">Host</label>
+                  <input className="conn-input" value={host} onChange={e => setHost(e.target.value)} placeholder="127.0.0.1" />
                 </div>
-                <div style={{ width: 100 }}>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Port</label>
-                  <input style={inputStyle} value={port} onChange={e => setPort(e.target.value)} placeholder="4500" type="number" />
+                <div className="conn-port-field">
+                  <label className="conn-field-label">Port</label>
+                  <input className="conn-input" value={port} onChange={e => setPort(e.target.value)} placeholder="4500" type="number" />
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div className="conn-form-actions">
                 <button className="btn-small btn-primary" onClick={() => handleSave(false)}>
                   {editingId ? 'Update' : 'Save'}
                 </button>
@@ -215,7 +208,7 @@ export function ConnectionsPanel({ currentUrl, connState, onConnect, onDisconnec
             </div>
           </>
         ) : (
-          <button className="btn-small btn-primary" onClick={() => { resetForm(); setShowAdd(true); }} style={{ marginTop: 4 }}>
+          <button className="btn-small btn-primary conn-add-connection-btn" onClick={() => { resetForm(); setShowAdd(true); }}>
             + Add Connection
           </button>
         )}
@@ -223,11 +216,11 @@ export function ConnectionsPanel({ currentUrl, connState, onConnect, onDisconnec
 
       <div className="settings-section">
         <h3>Quick Connect</h3>
-        <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
+        <p className="conn-quick-desc">
           Connect directly without saving. The current URL from the General tab is used.
         </p>
         <div className="settings-row">
-          <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{currentUrl}</label>
+          <label className="conn-url-display">{currentUrl}</label>
           {connState === 'connected' ? (
             <button className="btn-small" onClick={onDisconnect}>Disconnect</button>
           ) : (

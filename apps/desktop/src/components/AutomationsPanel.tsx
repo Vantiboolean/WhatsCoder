@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   listAutomations,
@@ -29,6 +29,7 @@ import {
   formatScheduleSummary,
   formatTimestamp,
 } from '../lib/automations';
+import { DesktopEmptyState, DesktopPageShell } from './DesktopPageShell';
 
 // ── Automation Templates (matching Codex originals) ──
 
@@ -260,6 +261,7 @@ export interface AutomationsPanelProps {
   ) => Promise<{ ok: boolean; threadId?: string; error?: string }>;
   onAutomationsChanged?: () => void | Promise<void>;
   onOpenThread?: (threadId: string) => void | Promise<void>;
+  windowControls?: React.ReactNode;
 }
 
 export function AutomationsPanel({
@@ -268,6 +270,7 @@ export function AutomationsPanel({
   onExecuteAutomation,
   onAutomationsChanged,
   onOpenThread,
+  windowControls,
 }: AutomationsPanelProps) {
   const { t } = useTranslation();
   const defaultProjectCwd = activeProjectCwd ?? projects[0]?.cwd ?? null;
@@ -547,69 +550,59 @@ export function AutomationsPanel({
 
   if (viewMode === 'detail' || viewMode === 'create') {
     return (
-      <div className="automations-panel">
-        <div className="automations-header" data-tauri-drag-region>
-          <div className="automations-breadcrumb">
-            <button className="automations-breadcrumb-btn" onClick={handleBack}>{t('automations.title')}</button>
-            <span className="automations-breadcrumb-sep">
-              <svg width="6" height="10" viewBox="0 0 6 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M1 1l4 4-4 4"/></svg>
-            </span>
-            <span className="automations-breadcrumb-current">
-              {draft.id ? draft.name || t('common.edit') : t('automations.newAutomation')}
-            </span>
-          </div>
-          <div className="automations-header-actions">
-            {viewMode === 'detail' && draft.id && (
-              <>
-                <button
-                  className="automations-action-btn automations-action-btn--run"
-                  onClick={() => { const row = automations.find(a => a.id === draft.id); if (row) void handleRunNow(row); }}
-                  disabled={runningId === draft.id}
-                  title={t('automations.runNow')}
-                >
-                  {runningId === draft.id ? (
-                    <svg className="automations-spinner" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20 14" /></svg>
-                  ) : (
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="5,3 13,8 5,13"/></svg>
-                  )}
-                  {t('automations.runNow')}
-                </button>
-                {selectedAutomation?.last_thread_id && onOpenThread && (
-                  <button
-                    className="automations-action-btn"
-                    onClick={() => handleOpenLastThread(selectedAutomation.last_thread_id!)}
-                    title={t('automations.openThread')}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M6 3h7v7" />
-                      <path d="M10.5 5.5L4.5 11.5" />
-                      <path d="M3 6v7h7" />
-                    </svg>
-                    {t('automations.openThread')}
-                  </button>
-                )}
-                {draft.status === 'ACTIVE' ? (
-                  <button className="automations-action-btn" onClick={() => setDraft(d => ({ ...d, status: 'PAUSED' }))} title={t('automations.pause')}>
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="3" width="3" height="10" rx="0.5"/><rect x="9" y="3" width="3" height="10" rx="0.5"/></svg>
-                    {t('automations.pause')}
-                  </button>
-                ) : (
-                  <button className="automations-action-btn automations-action-btn--resume" onClick={() => setDraft(d => ({ ...d, status: 'ACTIVE' }))} title={t('automations.resume')}>
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="5,3 13,8 5,13"/></svg>
-                    {t('automations.resume')}
-                  </button>
-                )}
-                <button className="automations-action-btn automations-action-btn--danger" onClick={() => setConfirmDeleteId(draft.id)} title={t('common.delete')}>
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5h10M5.5 5V3.5a1 1 0 011-1h3a1 1 0 011 1V5M6.5 7.5v4M9.5 7.5v4"/><path d="M4 5l.7 8.4a1 1 0 001 .9h4.6a1 1 0 001-.9L12 5"/></svg>
-                </button>
-              </>
+      <DesktopPageShell
+        className="automations-panel"
+        bodyClassName="automations-panel__body automations-panel__body--editor"
+        title={draft.id ? draft.name || t('common.edit') : t('automations.newAutomation')}
+        windowControls={windowControls}
+        actions={viewMode === 'detail' && draft.id ? (
+          <>
+            <button
+              className="automations-action-btn automations-action-btn--run"
+              onClick={() => { const row = automations.find(a => a.id === draft.id); if (row) void handleRunNow(row); }}
+              disabled={runningId === draft.id}
+              title={t('automations.runNow')}
+            >
+              {runningId === draft.id ? (
+                <svg className="automations-spinner" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20 14" /></svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="5,3 13,8 5,13"/></svg>
+              )}
+              {t('automations.runNow')}
+            </button>
+            {selectedAutomation?.last_thread_id && onOpenThread && (
+              <button
+                className="automations-action-btn"
+                onClick={() => handleOpenLastThread(selectedAutomation.last_thread_id!)}
+                title={t('automations.openThread')}
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 3h7v7" />
+                  <path d="M10.5 5.5L4.5 11.5" />
+                  <path d="M3 6v7h7" />
+                </svg>
+                {t('automations.openThread')}
+              </button>
             )}
-          </div>
-        </div>
-
+            {draft.status === 'ACTIVE' ? (
+              <button className="automations-action-btn" onClick={() => setDraft(d => ({ ...d, status: 'PAUSED' }))} title={t('automations.pause')}>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="3" width="3" height="10" rx="0.5"/><rect x="9" y="3" width="3" height="10" rx="0.5"/></svg>
+                {t('automations.pause')}
+              </button>
+            ) : (
+              <button className="automations-action-btn automations-action-btn--resume" onClick={() => setDraft(d => ({ ...d, status: 'ACTIVE' }))} title={t('automations.resume')}>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="5,3 13,8 5,13"/></svg>
+                {t('automations.resume')}
+              </button>
+            )}
+            <button className="automations-action-btn automations-action-btn--danger" onClick={() => setConfirmDeleteId(draft.id)} title={t('common.delete')}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5h10M5.5 5V3.5a1 1 0 011-1h3a1 1 0 011 1V5M6.5 7.5v4M9.5 7.5v4"/><path d="M4 5l.7 8.4a1 1 0 001 .9h4.6a1 1 0 001-.9L12 5"/></svg>
+            </button>
+          </>
+        ) : null}
+      >
         {panelErrorBanner}
 
-        {/* Delete confirmation */}
         {confirmDeleteId && (
           <div className="automations-confirm-overlay">
             <div className="automations-confirm-card">
@@ -623,8 +616,9 @@ export function AutomationsPanel({
           </div>
         )}
 
-        <div className="automations-editor">
-          <form onSubmit={e => { e.preventDefault(); void handleSave(); }}>
+        <div className="desktop-page-surface desktop-page-surface--scroll">
+          <div className="automations-editor">
+            <form onSubmit={e => { e.preventDefault(); void handleSave(); }}>
             {/* Name */}
             <div className="automations-field">
               <label>{t('automations.name')}</label>
@@ -904,27 +898,25 @@ export function AutomationsPanel({
                 )}
               </div>
             )}
-          </form>
+            </form>
+          </div>
         </div>
-      </div>
+      </DesktopPageShell>
     );
   }
 
   // Templates view
   if (viewMode === 'templates') {
     return (
-      <div className="automations-panel">
-        <div className="automations-header" data-tauri-drag-region>
-          <div className="automations-breadcrumb">
-            <button className="automations-breadcrumb-btn" onClick={() => automations.length > 0 ? setViewMode('list') : setViewMode('list')}>{t('automations.title')}</button>
-            <span className="automations-breadcrumb-sep">
-              <svg width="6" height="10" viewBox="0 0 6 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M1 1l4 4-4 4"/></svg>
-            </span>
-            <span className="automations-breadcrumb-current">{t('automations.templates')}</span>
-          </div>
-        </div>
+      <DesktopPageShell
+        className="automations-panel"
+        bodyClassName="automations-panel__body"
+        title={t('automations.templates')}
+        windowControls={windowControls}
+      >
         {panelErrorBanner}
-        <div className="automations-templates-body">
+        <div className="desktop-page-surface desktop-page-surface--scroll">
+          <div className="automations-templates-body">
           {TEMPLATE_SECTIONS.map(section => {
             const cards = section.cardIds.map(id => TEMPLATE_MAP.get(id)).filter(Boolean) as AutomationTemplate[];
             const isExpanded = expandedSections.has(section.id);
@@ -954,18 +946,22 @@ export function AutomationsPanel({
               </div>
             );
           })}
+          </div>
         </div>
-      </div>
+      </DesktopPageShell>
     );
   }
 
   // ── List View (default) ──
 
   return (
-    <div className="automations-panel">
-      <div className="automations-header" data-tauri-drag-region>
-        <h2>{t('automations.title')}</h2>
-        <div className="automations-header-actions">
+    <DesktopPageShell
+      className="automations-panel"
+      bodyClassName="automations-panel__body"
+      title={t('automations.title')}
+      windowControls={windowControls}
+      actions={(
+        <>
           <button className="automations-action-btn" onClick={() => setViewMode('templates')} title={t('automations.browseTemplates')}>
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
             {t('automations.templates')}
@@ -974,140 +970,149 @@ export function AutomationsPanel({
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
             {t('automations.newAutomation')}
           </button>
-        </div>
-      </div>
-
+        </>
+      )}
+    >
       {panelErrorBanner}
 
       {loading ? (
-        <div className="automations-loading">
-          <svg className="automations-spinner" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="28 20"/></svg>
-          <span>{t('common.loading')}</span>
+        <div className="desktop-page-surface">
+          <div className="automations-loading">
+            <svg className="automations-spinner" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="28 20"/></svg>
+            <span>{t('common.loading')}</span>
+          </div>
         </div>
       ) : automations.length === 0 ? (
-        <div className="automations-empty">
-          <div className="automations-empty-icon">
-            <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="24" cy="24" r="16"/>
-              <path d="M24 16v8l6 3"/>
-            </svg>
-          </div>
-          <h3>{t('automations.noAutomationsYet')}</h3>
-          <p>{t('automations.noAutomationsDesc')}</p>
-          <div className="automations-empty-actions">
-            <button className="btn-primary" onClick={() => setViewMode('templates')}>{t('automations.browseTemplates')}</button>
-            <button className="btn-secondary" onClick={handleCreateNew}>{t('automations.createFromScratch')}</button>
-          </div>
+        <div className="desktop-page-surface">
+          <div className="automations-empty">
+            <DesktopEmptyState
+              icon={(
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="24" cy="24" r="16"/>
+                  <path d="M24 16v8l6 3"/>
+                </svg>
+              )}
+              title={t('automations.noAutomationsYet')}
+              description={t('automations.noAutomationsDesc')}
+              actions={(
+                <>
+                  <button className="btn-primary" onClick={() => setViewMode('templates')}>{t('automations.browseTemplates')}</button>
+                  <button className="btn-secondary" onClick={handleCreateNew}>{t('automations.createFromScratch')}</button>
+                </>
+              )}
+            />
 
-          {/* Inline template quick picks */}
-          <div className="automations-quickstart">
-            {TEMPLATE_SECTIONS.slice(0, 3).map(section => {
-              const cards = section.cardIds.map(id => TEMPLATE_MAP.get(id)).filter(Boolean) as AutomationTemplate[];
-              return (
-                <div key={section.id} className="automations-quickstart-section">
-                  <h4>{t(`automations.${section.titleKey}`)}</h4>
-                  <div className="automations-quickstart-grid">
-                    {cards.map(tpl => (
-                      <button key={tpl.id} className="automations-template-card automations-template-card--compact" onClick={() => handleSelectTemplate(tpl)}>
-                        <span className="automations-template-icon">{tpl.iconLabel}</span>
-                        <div className="automations-template-info">
-                          <div className="automations-template-name">{tpl.name}</div>
-                          <div className="automations-template-schedule">{formatScheduleSummary(tpl.scheduleConfig)}</div>
-                        </div>
-                      </button>
-                    ))}
+            <div className="automations-quickstart">
+              {TEMPLATE_SECTIONS.slice(0, 3).map(section => {
+                const cards = section.cardIds.map(id => TEMPLATE_MAP.get(id)).filter(Boolean) as AutomationTemplate[];
+                return (
+                  <div key={section.id} className="automations-quickstart-section">
+                    <h4>{t(`automations.${section.titleKey}`)}</h4>
+                    <div className="automations-quickstart-grid">
+                      {cards.map(tpl => (
+                        <button key={tpl.id} className="automations-template-card automations-template-card--compact" onClick={() => handleSelectTemplate(tpl)}>
+                          <span className="automations-template-icon">{tpl.iconLabel}</span>
+                          <div className="automations-template-info">
+                            <div className="automations-template-name">{tpl.name}</div>
+                            <div className="automations-template-schedule">{formatScheduleSummary(tpl.scheduleConfig)}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </div>
       ) : (
-        <div className="automations-list">
-          {automations.map(row => (
-            <div
-              key={row.id}
-              className={`automations-row${selectedId === row.id ? ' automations-row--active' : ''}${row.status === 'PAUSED' ? ' automations-row--paused' : ''}`}
-              onClick={() => handleSelectAutomation(row)}
-            >
-              <div className="automations-row-toggle" onClick={e => { e.stopPropagation(); void handleToggleStatus(row); }}>
-                <button className={`toggle-switch${row.status === 'ACTIVE' ? ' toggle-switch--on' : ''}`} title={row.status === 'ACTIVE' ? t('automations.pause') : t('automations.resume')}>
-                  <span className="toggle-knob"/>
-                </button>
-              </div>
+        <div className="desktop-page-surface desktop-page-surface--scroll">
+          <div className="automations-list">
+            {automations.map(row => (
+              <div
+                key={row.id}
+                className={`automations-row${selectedId === row.id ? ' automations-row--active' : ''}${row.status === 'PAUSED' ? ' automations-row--paused' : ''}`}
+                onClick={() => handleSelectAutomation(row)}
+              >
+                <div className="automations-row-toggle" onClick={e => { e.stopPropagation(); void handleToggleStatus(row); }}>
+                  <button className={`toggle-switch${row.status === 'ACTIVE' ? ' toggle-switch--on' : ''}`} title={row.status === 'ACTIVE' ? t('automations.pause') : t('automations.resume')}>
+                    <span className="toggle-knob"/>
+                  </button>
+                </div>
 
-              <div className="automations-row-info">
-                <div className="automations-row-name">{row.name}</div>
-                <div className="automations-row-subline">
-                  {row.project_cwd && (
-                    <span className="automations-project-badge">{getProjectLabel(row.project_cwd)}</span>
+                <div className="automations-row-info">
+                  <div className="automations-row-name">{row.name}</div>
+                  <div className="automations-row-subline">
+                    {row.project_cwd && (
+                      <span className="automations-project-badge">{getProjectLabel(row.project_cwd)}</span>
+                    )}
+                    {row.last_run_status && (
+                      <span className={`automations-run-state-badge automations-run-state-badge--${row.last_run_status.toLowerCase()}`}>
+                        {EXECUTION_STATE_LABELS[row.last_run_status]}
+                      </span>
+                    )}
+                    <div className="automations-row-schedule">
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5.5v2.5l2 1.2"/></svg>
+                      <span>{formatScheduleSummary(automationRowToScheduleConfig(row))}</span>
+                    </div>
+                  </div>
+                  {row.last_error && (
+                    <div className="automations-row-error" title={row.last_error}>{row.last_error}</div>
                   )}
-                  {row.last_run_status && (
-                    <span className={`automations-run-state-badge automations-run-state-badge--${row.last_run_status.toLowerCase()}`}>
-                      {EXECUTION_STATE_LABELS[row.last_run_status]}
-                    </span>
-                  )}
-                  <div className="automations-row-schedule">
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5.5v2.5l2 1.2"/></svg>
-                    <span>{formatScheduleSummary(automationRowToScheduleConfig(row))}</span>
+                </div>
+
+                <div className="automations-row-meta">
+                  <div className="automations-row-meta-item">
+                    <span className="automations-meta-label">{t('common.next')}</span>
+                    <span>{row.status === 'PAUSED' ? '-' : formatTimestamp(row.next_run_at)}</span>
+                  </div>
+                  <div className="automations-row-meta-item">
+                    <span className="automations-meta-label">{t('automations.last')}</span>
+                    <span>{formatTimestamp(row.last_run_at)}</span>
                   </div>
                 </div>
-                {row.last_error && (
-                  <div className="automations-row-error" title={row.last_error}>{row.last_error}</div>
-                )}
-              </div>
 
-              <div className="automations-row-meta">
-                <div className="automations-row-meta-item">
-                  <span className="automations-meta-label">{t('common.next')}</span>
-                  <span>{row.status === 'PAUSED' ? '-' : formatTimestamp(row.next_run_at)}</span>
-                </div>
-                <div className="automations-row-meta-item">
-                  <span className="automations-meta-label">{t('automations.last')}</span>
-                  <span>{formatTimestamp(row.last_run_at)}</span>
-                </div>
-              </div>
-
-              <div className="automations-row-actions" onClick={e => e.stopPropagation()}>
-                {row.last_thread_id && onOpenThread && (
+                <div className="automations-row-actions" onClick={e => e.stopPropagation()}>
+                  {row.last_thread_id && onOpenThread && (
+                    <button
+                      className="automations-icon-btn"
+                      onClick={() => handleOpenLastThread(row.last_thread_id!)}
+                      title={t('automations.openThread')}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M6 3h7v7" />
+                        <path d="M10.5 5.5L4.5 11.5" />
+                        <path d="M3 6v7h7" />
+                      </svg>
+                    </button>
+                  )}
                   <button
                     className="automations-icon-btn"
-                    onClick={() => handleOpenLastThread(row.last_thread_id!)}
-                    title={t('automations.openThread')}
+                    onClick={() => void handleRunNow(row)}
+                    disabled={runningId === row.id}
+                    title={t('automations.runNow')}
                   >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M6 3h7v7" />
-                      <path d="M10.5 5.5L4.5 11.5" />
-                      <path d="M3 6v7h7" />
-                    </svg>
+                    {runningId === row.id ? (
+                      <svg className="automations-spinner" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20 14"/></svg>
+                    ) : (
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="5,3 13,8 5,13"/></svg>
+                    )}
                   </button>
-                )}
-                <button
-                  className="automations-icon-btn"
-                  onClick={() => void handleRunNow(row)}
-                  disabled={runningId === row.id}
-                  title={t('automations.runNow')}
-                >
-                  {runningId === row.id ? (
-                    <svg className="automations-spinner" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20 14"/></svg>
-                  ) : (
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="5,3 13,8 5,13"/></svg>
-                  )}
-                </button>
-                <button className="automations-icon-btn automations-icon-btn--danger" onClick={() => {
-                  if (confirmDeleteId === row.id) { void handleDelete(row.id); } else { setConfirmDeleteId(row.id); setTimeout(() => setConfirmDeleteId(null), 3000); }
-                }} title={confirmDeleteId === row.id ? t('automations.clickAgainToConfirm') : t('common.delete')}>
-                  {confirmDeleteId === row.id ? (
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--status-error)" strokeWidth="2" strokeLinecap="round"><path d="M3 8h10"/></svg>
-                  ) : (
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5h10M5.5 5V3.5a1 1 0 011-1h3a1 1 0 011 1V5M6.5 7.5v4M9.5 7.5v4"/><path d="M4 5l.7 8.4a1 1 0 001 .9h4.6a1 1 0 001-.9L12 5"/></svg>
-                  )}
-                </button>
+                  <button className="automations-icon-btn automations-icon-btn--danger" onClick={() => {
+                    if (confirmDeleteId === row.id) { void handleDelete(row.id); } else { setConfirmDeleteId(row.id); setTimeout(() => setConfirmDeleteId(null), 3000); }
+                  }} title={confirmDeleteId === row.id ? t('automations.clickAgainToConfirm') : t('common.delete')}>
+                    {confirmDeleteId === row.id ? (
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--status-error)" strokeWidth="2" strokeLinecap="round"><path d="M3 8h10"/></svg>
+                    ) : (
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5h10M5.5 5V3.5a1 1 0 011-1h3a1 1 0 011 1V5M6.5 7.5v4M9.5 7.5v4"/><path d="M4 5l.7 8.4a1 1 0 001 .9h4.6a1 1 0 001-.9L12 5"/></svg>
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
-    </div>
+    </DesktopPageShell>
   );
 }

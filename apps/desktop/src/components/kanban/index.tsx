@@ -22,6 +22,15 @@ import {
   type KanbanPriority,
 } from '../../lib/kanbanDb';
 import type { ThreadDetail } from '@whats-coder/shared';
+import {
+  buildIssueDraftKey,
+  createEmptyWorkspaceDraft,
+  getWorkspaceDraftSummary,
+  loadWorkspaceDraftMap,
+  type WorkspaceDraftSummary,
+} from '../../lib/workspaceDrafts';
+import { DesktopEmptyState, DesktopPageShell } from '../DesktopPageShell';
+import type { WorkspaceDraftPrefill, WorkspaceSectionId } from '../WorkspacePanel';
 import { ThreadView } from '../ThreadView';
 import { KanbanColumn } from './KanbanColumn';
 import { FilterBar } from './FilterBar';
@@ -29,29 +38,45 @@ import { IssueDialog } from './IssueDialog';
 import {
   genId,
   projectNameFromId,
-  formatDateTime,
   nowUnixSeconds,
-  getLastTurn,
-  turnStatusToExecutionState,
   formatErrorMessage,
-  extractExecutionResultSummary,
   buildIssueExecutionPrompt,
   useLocalStorage,
 } from './kanban-helpers';
 export type { KanbanProject, KanbanExecCallbacks } from './kanban-helpers';
 
-const THREAD_POLL_INTERVAL_MS = 3000;
+const KANBAN_STATUS_COLORS: Record<KanbanStatus, string> = {
+  todo: 'var(--accent-blue)',
+  in_progress: 'var(--accent-yellow, #eab308)',
+  in_review: 'var(--accent-purple, #a855f7)',
+  done: 'var(--accent-green)',
+};
+const EMPTY_WORKSPACE_SUMMARY = getWorkspaceDraftSummary(createEmptyWorkspaceDraft());
 
 export const KanbanPanel = memo(function KanbanPanel({
   projects,
+  activeProjectId,
+  onProjectSelect,
+  embedded = false,
   executionSyncVersion,
   executionModelLabel,
+  observedThreadId,
+  observedThreadDetail,
+  onOpenWorkspace,
   execCallbacks,
+  windowControls,
 }: {
   projects: import('./kanban-helpers').KanbanProject[];
+  activeProjectId?: string | null;
+  onProjectSelect?: (projectId: string) => void;
+  embedded?: boolean;
   executionSyncVersion?: number;
   executionModelLabel?: string | null;
+  observedThreadId?: string | null;
+  observedThreadDetail?: ThreadDetail | null;
+  onOpenWorkspace?: (params: { projectId: string; section: WorkspaceSectionId; prefill?: WorkspaceDraftPrefill }) => void;
   execCallbacks?: import('./kanban-helpers').KanbanExecCallbacks;
+  windowControls?: import('react').ReactNode;
 }) {
   const { t } = useTranslation();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -79,7 +104,6 @@ export const KanbanPanel = memo(function KanbanPanel({
   const [threadLoading, setThreadLoading] = useState(false);
   const [executingIssueIds, setExecutingIssueIds] = useState<Set<string>>(new Set());
   const [deletingIssueId, setDeletingIssueId] = useState<string | null>(null);
-  const threadPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const threadViewSeqRef = useRef(0);
 
   const selectedProject = projectOptions.find((p) => p.id === selectedProjectId) ?? null;
@@ -107,10 +131,15 @@ export const KanbanPanel = memo(function KanbanPanel({
   }, [refreshProjectOptions]);
 
   useEffect(() => {
+    if (activeProjectId && activeProjectId !== selectedProjectId) {
+      setSelectedProjectId(activeProjectId);
+      return;
+    }
+
     if (projectOptions.length > 0 && (!selectedProjectId || !projectOptions.find((p) => p.id === selectedProjectId))) {
       setSelectedProjectId(projectOptions[0].id);
     }
-  }, [projectOptions, selectedProjectId]);
+  }, [activeProjectId, projectOptions, selectedProjectId]);
 
   const refreshIssues = useCallback(async (projectId: string) => {
     try {
@@ -180,74 +209,38 @@ export const KanbanPanel = memo(function KanbanPanel({
 
   const handleSelectProject = useCallback((id: string) => {
     setSelectedProjectId(id);
+    onProjectSelect?.(id);
     setSearchQuery('');
     setPriorityFilter('all');
     setTagFilter('');
+  }, [onProjectSelect]);
+
+  const buildWorkspacePrefill = useCallback((issue: KanbanIssue): WorkspaceDraftPrefill => {
+    const linkedIssue = issue.issue_number > 0 ? `#${issue.issue_number} ${issue.title}` : issue.title;
+    const objective = issue.description?.trim() || issue.title;
+    return {
+      seedId: `kanban-issue-${issue.id}-${Date.now()}`,
+      projectId: issue.project_id,
+      issueId: issue.id,
+      issueLabel: linkedIssue,
+      linkedIssue,
+      objective,
+      activeTask: issue.title,
+    };
   }, []);
+
+  const handleOpenWorkspaceForIssue = useCallback((issue: KanbanIssue, section: WorkspaceSectionId) => {
+    onOpenWorkspace?.({
+      projectId: issue.project_id,
+      section,
+      prefill: buildWorkspacePrefill(issue),
+    });
+  }, [buildWorkspacePrefill, onOpenWorkspace]);
 
   const handleAddIssue = useCallback((status: KanbanStatus) => {
     setCreatingForStatus(status);
     setEditingIssue(null);
   }, []);
-
-  const syncExecutionStateFromThread = useCallback(async (params: {
-    runId: string;
-    issueId: string;
-    projectId: string;
-    detail: ThreadDetail;
-  }): Promise<boolean> => {
-    const lastTurn = getLastTurn(params.detail);
-    const nextState = turnStatusToExecutionState(lastTurn);
-    if (!nextState || nextState === 'RUNNING') return false;
-
-    const finishedAt = nowUnixSeconds();
-    const lastError = nextState === 'FAILED' || nextState === 'CANCELLED'
-      ? lastTurn?.error?.message ?? null
-      : null;
-    const resultSummary = nextState === 'SUCCESS'
-      ? extractExecutionResultSummary(params.detail)
-      : null;
-
-    await updateKanbanIssueRun(params.runId, {
-      status: nextState,
-      finishedAt,
-      errorMessage: lastError,
-      resultSummary,
-    });
-    await updateKanbanIssueExecution(params.issueId, {
-      lastRunStatus: nextState,
-      lastFinishedAt: finishedAt,
-      lastError,
-      lastResultSummary: resultSummary,
-    });
-
-    if (selectedProjectId === params.projectId) {
-      await refreshIssues(params.projectId);
-    }
-
-    return true;
-  }, [refreshIssues, selectedProjectId]);
-
-  const startThreadPolling = useCallback((threadId: string, ownerSeq: number) => {
-    if (threadPollRef.current) clearInterval(threadPollRef.current);
-    threadPollRef.current = setInterval(async () => {
-      if (!execCallbacks || ownerSeq !== threadViewSeqRef.current) {
-        if (threadPollRef.current) clearInterval(threadPollRef.current);
-        threadPollRef.current = null;
-        return;
-      }
-      try {
-        const detail = await execCallbacks.readThread(threadId);
-        if (ownerSeq !== threadViewSeqRef.current) return;
-        setThreadDetail(detail);
-        const lastTurn = getLastTurn(detail);
-        if (lastTurn && lastTurn.status !== 'inProgress') {
-          if (threadPollRef.current) clearInterval(threadPollRef.current);
-          threadPollRef.current = null;
-        }
-      } catch { /* ignore */ }
-    }, THREAD_POLL_INTERVAL_MS);
-  }, [execCallbacks]);
 
   const handleExecuteIssue = useCallback(async (
     issue: KanbanIssue,
@@ -256,6 +249,7 @@ export const KanbanPanel = memo(function KanbanPanel({
     if (!execCallbacks) return;
     const projectId = issue.project_id || selectedProjectId;
     if (!projectId) return;
+    const shouldRevealExecution = triggerSource === 'manual';
     const runId = genId();
     const startedAt = nowUnixSeconds();
     let thread: { id: string } | null = null;
@@ -301,48 +295,42 @@ export const KanbanPanel = memo(function KanbanPanel({
       }
       await refreshIssues(projectId);
 
-      const linkedIssue: KanbanIssue = {
-        ...issue,
-        linked_thread_id: thread.id,
-        status: newStatus,
-        last_run_status: 'RUNNING' as KanbanExecutionState,
-        last_run_at: startedAt,
-        last_finished_at: null,
-        last_error: null,
-      };
-      const execSeq = ++threadViewSeqRef.current;
-      setViewingThreadIssue(linkedIssue);
-      setThreadLoading(true);
-      setThreadDetail(null);
+      if (shouldRevealExecution) {
+        const linkedIssue: KanbanIssue = {
+          ...issue,
+          linked_thread_id: thread.id,
+          status: newStatus,
+          last_run_status: 'RUNNING' as KanbanExecutionState,
+          last_run_at: startedAt,
+          last_finished_at: null,
+          last_error: null,
+        };
+        const execSeq = ++threadViewSeqRef.current;
+        setViewingThreadIssue(linkedIssue);
+        setThreadLoading(true);
+        setThreadDetail(null);
+        execCallbacks.setObservedThread?.({ threadId: thread.id, detail: null });
 
-      let initialDetail: ThreadDetail | null = null;
-      try {
-        initialDetail = await execCallbacks.readThread(thread.id);
-        if (execSeq === threadViewSeqRef.current) {
-          setThreadDetail(initialDetail);
+        try {
+          const initialDetail = await execCallbacks.readThread(thread.id);
+          if (execSeq === threadViewSeqRef.current) {
+            setThreadDetail(initialDetail);
+          }
+          await execCallbacks.onThreadObserved?.({
+            threadId: thread.id,
+            detail: initialDetail,
+            runId,
+            issueId: issue.id,
+          });
+        } catch {
+          if (execSeq === threadViewSeqRef.current) {
+            setThreadDetail(null);
+          }
+        } finally {
+          if (execSeq === threadViewSeqRef.current) {
+            setThreadLoading(false);
+          }
         }
-      } catch {
-        if (execSeq === threadViewSeqRef.current) {
-          setThreadDetail(null);
-        }
-      } finally {
-        if (execSeq === threadViewSeqRef.current) {
-          setThreadLoading(false);
-        }
-      }
-
-      if (initialDetail) {
-        const settled = await syncExecutionStateFromThread({
-          runId,
-          issueId: issue.id,
-          projectId,
-          detail: initialDetail,
-        });
-        if (execSeq === threadViewSeqRef.current && !settled) {
-          startThreadPolling(thread.id, execSeq);
-        }
-      } else if (execSeq === threadViewSeqRef.current) {
-        startThreadPolling(thread.id, execSeq);
       }
     } catch (err) {
       const errorMessage = formatErrorMessage(err);
@@ -378,8 +366,6 @@ export const KanbanPanel = memo(function KanbanPanel({
     refreshIssues,
     selectedProject,
     selectedProjectId,
-    startThreadPolling,
-    syncExecutionStateFromThread,
   ]);
 
   const handleQuickAdd = useCallback(async (title: string, status: KanbanStatus) => {
@@ -521,6 +507,26 @@ export const KanbanPanel = memo(function KanbanPanel({
     }, {} as Record<KanbanStatus, KanbanIssue[]>),
   [filteredIssues]);
 
+  const donePercent = useMemo(() => {
+    if (issues.length === 0) return 0;
+    const doneCount = issues.reduce((count, issue) => count + (issue.status === 'done' ? 1 : 0), 0);
+    return Math.round((doneCount / issues.length) * 100);
+  }, [issues]);
+
+  const activeFilterCount = useMemo(
+    () => Number(Boolean(searchQuery)) + Number(priorityFilter !== 'all') + Number(Boolean(tagFilter)),
+    [priorityFilter, searchQuery, tagFilter],
+  );
+  const workspaceSummaryByIssue = useMemo<Record<string, WorkspaceDraftSummary>>(() => {
+    const draftMap = loadWorkspaceDraftMap();
+    return Object.fromEntries(
+      issues.map((issue) => {
+        const issueDraft = draftMap[buildIssueDraftKey(issue.id)];
+        return [issue.id, issueDraft ? getWorkspaceDraftSummary(issueDraft) : EMPTY_WORKSPACE_SUMMARY];
+      }),
+    );
+  }, [issues]);
+
   useEffect(() => {
     if (!editingIssue) return;
     const freshIssue = issues.find((issue) => issue.id === editingIssue.id);
@@ -533,11 +539,8 @@ export const KanbanPanel = memo(function KanbanPanel({
     threadViewSeqRef.current += 1;
     setViewingThreadIssue(null);
     setThreadDetail(null);
-    if (threadPollRef.current) {
-      clearInterval(threadPollRef.current);
-      threadPollRef.current = null;
-    }
-  }, []);
+    execCallbacks?.setObservedThread?.({ threadId: null, detail: null });
+  }, [execCallbacks]);
 
   const handleViewThread = useCallback(async (issue: KanbanIssue) => {
     if (!execCallbacks || !issue.linked_thread_id) return;
@@ -545,11 +548,15 @@ export const KanbanPanel = memo(function KanbanPanel({
     setViewingThreadIssue(issue);
     setThreadLoading(true);
     setThreadDetail(null);
+    execCallbacks.setObservedThread?.({ threadId: issue.linked_thread_id, detail: null });
     try {
       const detail = await execCallbacks.readThread(issue.linked_thread_id);
       if (seq !== threadViewSeqRef.current) return;
       setThreadDetail(detail);
-      startThreadPolling(issue.linked_thread_id, seq);
+      await execCallbacks.onThreadObserved?.({
+        threadId: issue.linked_thread_id,
+        detail,
+      });
     } catch {
       if (seq === threadViewSeqRef.current) {
         setThreadDetail(null);
@@ -559,108 +566,89 @@ export const KanbanPanel = memo(function KanbanPanel({
         setThreadLoading(false);
       }
     }
-  }, [execCallbacks, startThreadPolling]);
+  }, [execCallbacks]);
 
   useEffect(() => {
     return () => {
-      if (threadPollRef.current) clearInterval(threadPollRef.current);
+      execCallbacks?.setObservedThread?.({ threadId: null, detail: null });
     };
-  }, []);
+  }, [execCallbacks]);
+
+  useEffect(() => {
+    if (!viewingThreadIssue?.linked_thread_id) return;
+    if (!observedThreadId || observedThreadId !== viewingThreadIssue.linked_thread_id) return;
+    if (!observedThreadDetail) return;
+    setThreadDetail(observedThreadDetail);
+    setThreadLoading(false);
+  }, [observedThreadDetail, observedThreadId, viewingThreadIssue]);
 
   const deletingIssue = deletingIssueId ? issues.find((i) => i.id === deletingIssueId) : null;
+  const filterBar = (
+    <FilterBar
+      issues={issues}
+      searchQuery={searchQuery}
+      onSearchChange={setSearchQuery}
+      priorityFilter={priorityFilter}
+      onPriorityFilterChange={setPriorityFilter}
+      tagFilter={tagFilter}
+      onTagFilterChange={setTagFilter}
+      allTags={allTags}
+      totalCount={issues.length}
+      filteredCount={filteredIssues.length}
+      autoRun={autoRun}
+      onAutoRunChange={setAutoRun}
+      hasExecCallbacks={!!execCallbacks}
+      executionModelLabel={executionModelLabel ?? null}
+    />
+  );
+  const newIssueAction = (
+    <button type="button" className="kanban-primary-action" onClick={() => handleAddIssue('todo')}>
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8"><line x1="6" y1="2" x2="6" y2="10" /><line x1="2" y1="6" x2="10" y2="6" /></svg>
+      {t('kanban.newIssue')}
+    </button>
+  );
 
-  if (projectOptions.length === 0) {
-    return (
-      <div className="kanban-panel">
-        <div className="kanban-empty-state">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.4">
-            <rect x="4" y="8" width="12" height="32" rx="2" />
-            <rect x="18" y="8" width="12" height="22" rx="2" />
-            <rect x="32" y="8" width="12" height="28" rx="2" />
-          </svg>
-          <p>{t('kanban.noProjects')}</p>
-          <span className="kanban-empty-hint">{t('kanban.noProjectsHint')}</span>
+  const content = (
+    <>
+      {dbError && (
+        <div className="kanban-error-banner" onClick={() => setDbError(null)}>
+          <span>DB Error: {dbError}</span>
+          <button onClick={() => setDbError(null)}>&#x2715;</button>
         </div>
-      </div>
-    );
-  }
+      )}
 
-  return (
-    <div className="kanban-panel">
-      <div className="kanban-panel-main">
-        <div className="kanban-header" data-tauri-drag-region>
-          <div className="kanban-header-left">
-            <h2 className="kanban-header-title">{t('kanban.title')}</h2>
-            <span className="kanban-header-sep">/</span>
-            <select
-              className="kanban-project-select"
-              value={selectedProjectId ?? ''}
-              onChange={(e) => handleSelectProject(e.target.value)}
-            >
-              {projectOptions.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </div>
+      {loading ? (
+        <div className="kanban-loading">{t('common.loading')}</div>
+      ) : selectedProject ? (
+        <div className="kanban-board" onDragLeave={() => { setDragOverColumn(null); setDragOverCardId(null); }}>
+          {KANBAN_COLUMNS.map((col) => (
+            <KanbanColumn
+              key={col.key}
+              status={col.key}
+              label={t(col.i18nKey)}
+              issues={issuesByStatus[col.key]}
+              commentCounts={commentCounts}
+              collapsed={collapsedColumns.has(col.key)}
+              onToggleCollapse={handleToggleCollapse}
+              onAddIssue={handleAddIssue}
+              onQuickAdd={(title, status) => { void handleQuickAdd(title, status); }}
+              onEditIssue={(issue) => { setEditingIssue(issue); setCreatingForStatus(null); }}
+              onDeleteIssue={handleRequestDeleteIssue}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDragOverCard={handleDragOverCard}
+              onDrop={(e, s) => { void handleDrop(e, s); }}
+              dragOverColumn={dragOverColumn}
+              dragOverCardId={dragOverCardId}
+              onExecuteIssue={execCallbacks ? (issue) => { void handleExecuteIssue(issue); } : undefined}
+              onViewThread={execCallbacks ? (issue) => { void handleViewThread(issue); } : undefined}
+              onOpenWorkspaceIssue={onOpenWorkspace ? (issue) => { handleOpenWorkspaceForIssue(issue, 'tasks'); } : undefined}
+              executingIssueIds={executingIssueIds}
+              workspaceSummaryByIssue={workspaceSummaryByIssue}
+            />
+          ))}
         </div>
-
-        {selectedProject && (
-          <FilterBar
-            issues={issues}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            priorityFilter={priorityFilter}
-            onPriorityFilterChange={setPriorityFilter}
-            tagFilter={tagFilter}
-            onTagFilterChange={setTagFilter}
-            allTags={allTags}
-            totalCount={issues.length}
-            filteredCount={filteredIssues.length}
-            autoRun={autoRun}
-            onAutoRunChange={setAutoRun}
-            hasExecCallbacks={!!execCallbacks}
-            executionModelLabel={executionModelLabel ?? null}
-          />
-        )}
-
-        {dbError && (
-          <div className="kanban-error-banner" onClick={() => setDbError(null)}>
-            <span>DB Error: {dbError}</span>
-            <button onClick={() => setDbError(null)}>&#x2715;</button>
-          </div>
-        )}
-
-        {loading ? (
-          <div className="kanban-loading">{t('common.loading')}</div>
-        ) : selectedProject ? (
-          <div className="kanban-board" onDragLeave={() => { setDragOverColumn(null); setDragOverCardId(null); }}>
-            {KANBAN_COLUMNS.map((col) => (
-              <KanbanColumn
-                key={col.key}
-                status={col.key}
-                label={t(col.i18nKey)}
-                issues={issuesByStatus[col.key]}
-                commentCounts={commentCounts}
-                collapsed={collapsedColumns.has(col.key)}
-                onToggleCollapse={handleToggleCollapse}
-                onAddIssue={handleAddIssue}
-                onQuickAdd={(title, status) => { void handleQuickAdd(title, status); }}
-                onEditIssue={(issue) => { setEditingIssue(issue); setCreatingForStatus(null); }}
-                onDeleteIssue={handleRequestDeleteIssue}
-                onDragStart={handleDragStart}
-                onDragOver={handleDragOver}
-                onDragOverCard={handleDragOverCard}
-                onDrop={(e, s) => { void handleDrop(e, s); }}
-                dragOverColumn={dragOverColumn}
-                dragOverCardId={dragOverCardId}
-                onExecuteIssue={execCallbacks ? (issue) => { void handleExecuteIssue(issue); } : undefined}
-                onViewThread={execCallbacks ? (issue) => { void handleViewThread(issue); } : undefined}
-                executingIssueIds={executingIssueIds}
-              />
-            ))}
-          </div>
-        ) : null}
-      </div>
+      ) : null}
 
       {viewingThreadIssue && (
         <div className="kanban-dialog-backdrop kanban-dialog-backdrop--sheet" onClick={handleCloseThreadPanel}>
@@ -699,6 +687,31 @@ export const KanbanPanel = memo(function KanbanPanel({
                 <div className="kanban-thread-panel-empty">{t('kanban.noExecutionData')}</div>
               )}
             </div>
+            <div className="kanban-dialog-footer">
+              <div className="kanban-dialog-actions">
+                {onOpenWorkspace ? (
+                  <>
+                    <button
+                      type="button"
+                      className="kanban-dialog-btn kanban-dialog-btn--secondary"
+                      onClick={() => handleOpenWorkspaceForIssue(viewingThreadIssue, 'runtime')}
+                    >
+                      {t('kanban.openWorkspaceRuntime')}
+                    </button>
+                    <button
+                      type="button"
+                      className="kanban-dialog-btn kanban-dialog-btn--secondary"
+                      onClick={() => handleOpenWorkspaceForIssue(viewingThreadIssue, 'context')}
+                    >
+                      {t('kanban.openWorkspaceContext')}
+                    </button>
+                  </>
+                ) : null}
+                <button type="button" className="kanban-dialog-btn kanban-dialog-btn--secondary" onClick={handleCloseThreadPanel}>
+                  {t('common.close')}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -721,6 +734,7 @@ export const KanbanPanel = memo(function KanbanPanel({
             });
           }}
           onOpenExecution={execCallbacks ? (issue) => { void handleViewThread(issue); } : undefined}
+          onOpenWorkspace={onOpenWorkspace ? (issue, section) => { handleOpenWorkspaceForIssue(issue, section); } : undefined}
           onRerun={execCallbacks ? (issue) => { void handleExecuteIssue(issue, 'manual'); } : undefined}
           canExecute={!!execCallbacks}
           onClose={() => { setEditingIssue(null); setCreatingForStatus(null); }}
@@ -755,6 +769,112 @@ export const KanbanPanel = memo(function KanbanPanel({
           </div>
         </div>
       )}
-    </div>
+    </>
+  );
+
+  if (projectOptions.length === 0) {
+    if (embedded) {
+      return (
+        <div className="kanban-embedded kanban-embedded--empty">
+          <DesktopEmptyState
+            icon={(
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="4" y="8" width="12" height="32" rx="2" />
+                <rect x="18" y="8" width="12" height="22" rx="2" />
+                <rect x="32" y="8" width="12" height="28" rx="2" />
+              </svg>
+            )}
+            title={t('kanban.noProjects')}
+            description={t('kanban.noProjectsHint')}
+          />
+        </div>
+      );
+    }
+    return (
+      <DesktopPageShell
+        className="kanban-panel"
+        title={t('kanban.title')}
+        windowControls={windowControls}
+      >
+        <div className="desktop-page-surface">
+          <DesktopEmptyState
+            icon={(
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="4" y="8" width="12" height="32" rx="2" />
+                <rect x="18" y="8" width="12" height="22" rx="2" />
+                <rect x="32" y="8" width="12" height="28" rx="2" />
+              </svg>
+            )}
+            title={t('kanban.noProjects')}
+            description={t('kanban.noProjectsHint')}
+          />
+        </div>
+      </DesktopPageShell>
+    );
+  }
+
+  if (embedded) {
+    return (
+      <div className="kanban-embedded">
+        {selectedProject ? (
+          <div className="kanban-toolbar kanban-toolbar--embedded">
+            {filterBar}
+            {newIssueAction}
+          </div>
+        ) : null}
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <DesktopPageShell
+      className="kanban-panel"
+      bodyClassName="kanban-panel__body"
+      title={t('kanban.title')}
+      windowControls={windowControls}
+      toolbar={selectedProject ? (
+        <div className="kanban-toolbar">
+          <select
+            className="kanban-project-select"
+            value={selectedProjectId ?? ''}
+            onChange={(e) => handleSelectProject(e.target.value)}
+          >
+            {projectOptions.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <FilterBar
+            issues={issues}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            priorityFilter={priorityFilter}
+            onPriorityFilterChange={setPriorityFilter}
+            tagFilter={tagFilter}
+            onTagFilterChange={setTagFilter}
+            allTags={allTags}
+            totalCount={issues.length}
+            filteredCount={filteredIssues.length}
+            autoRun={autoRun}
+            onAutoRunChange={setAutoRun}
+            hasExecCallbacks={!!execCallbacks}
+            executionModelLabel={executionModelLabel ?? null}
+          />
+          {newIssueAction}
+        </div>
+      ) : (
+        <select
+          className="kanban-project-select"
+          value={selectedProjectId ?? ''}
+          onChange={(e) => handleSelectProject(e.target.value)}
+        >
+          {projectOptions.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+      )}
+    >
+      {content}
+    </DesktopPageShell>
   );
 });

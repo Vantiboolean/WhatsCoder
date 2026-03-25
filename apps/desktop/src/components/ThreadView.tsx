@@ -48,6 +48,11 @@ type ThreadListItem = {
   item: ThreadItem;
 };
 
+type CachedTurnItems = {
+  totalCount: number;
+  newestFirstItems: ThreadListItem[];
+};
+
 function createTurnErrorItem(turn: Turn): ThreadListItem | null {
   if (!turn.error?.message) {
     return null;
@@ -71,7 +76,41 @@ function createTurnErrorItem(turn: Turn): ThreadListItem | null {
   };
 }
 
-function collectVisibleThreadItems(turns: Turn[] | undefined, maxVisible: number): {
+function getCachedTurnItems(
+  turn: Turn,
+  cache: WeakMap<Turn, CachedTurnItems>,
+): CachedTurnItems {
+  const cached = cache.get(turn);
+  if (cached) {
+    return cached;
+  }
+
+  const turnItems = turn.items ?? [];
+  const turnErrorItem = createTurnErrorItem(turn);
+  const newestFirstItems: ThreadListItem[] = [];
+
+  if (turnErrorItem) {
+    newestFirstItems.push(turnErrorItem);
+  }
+
+  for (let itemIndex = turnItems.length - 1; itemIndex >= 0; itemIndex--) {
+    const item = turnItems[itemIndex];
+    newestFirstItems.push({ key: item.id, item });
+  }
+
+  const next = {
+    totalCount: turnItems.length + (turnErrorItem ? 1 : 0),
+    newestFirstItems,
+  };
+  cache.set(turn, next);
+  return next;
+}
+
+function collectVisibleThreadItems(
+  turns: Turn[] | undefined,
+  maxVisible: number,
+  cache: WeakMap<Turn, CachedTurnItems>,
+): {
   totalCount: number;
   items: ThreadListItem[];
 } {
@@ -80,34 +119,42 @@ function collectVisibleThreadItems(turns: Turn[] | undefined, maxVisible: number
   }
 
   let totalCount = 0;
-  const items: ThreadListItem[] = [];
+  const newestFirstItems: ThreadListItem[] = [];
 
   for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex--) {
-    const turn = turns[turnIndex];
-    const turnItems = turn.items ?? [];
-    const turnErrorItem = createTurnErrorItem(turn);
+    const turnState = getCachedTurnItems(turns[turnIndex], cache);
+    totalCount += turnState.totalCount;
 
-    totalCount += turnItems.length;
-    if (turnErrorItem) {
-      totalCount += 1;
-    }
-
-    if (items.length >= maxVisible) {
+    if (newestFirstItems.length >= maxVisible || turnState.newestFirstItems.length === 0) {
       continue;
     }
 
-    if (turnErrorItem && items.length < maxVisible) {
-      items.push(turnErrorItem);
-    }
+    const remaining = maxVisible - newestFirstItems.length;
+    newestFirstItems.push(...turnState.newestFirstItems.slice(0, remaining));
+  }
 
-    for (let itemIndex = turnItems.length - 1; itemIndex >= 0 && items.length < maxVisible; itemIndex--) {
-      const item = turnItems[itemIndex];
-      items.push({ key: item.id, item });
+  const items = newestFirstItems.reverse();
+  return { totalCount, items };
+}
+
+function findStreamingAgentItemId(turns: Turn[] | undefined, isProcessing: boolean): string | null {
+  if (!isProcessing || !turns?.length) {
+    return null;
+  }
+
+  const lastTurn = turns[turns.length - 1];
+  if (!lastTurn || lastTurn.status !== 'inProgress' || !lastTurn.items?.length) {
+    return null;
+  }
+
+  for (let itemIndex = lastTurn.items.length - 1; itemIndex >= 0; itemIndex--) {
+    const item = lastTurn.items[itemIndex];
+    if (item.type === 'agentMessage') {
+      return item.id;
     }
   }
 
-  items.reverse();
-  return { totalCount, items };
+  return null;
 }
 
 export const ThreadView = memo(function ThreadView({
@@ -128,6 +175,7 @@ export const ThreadView = memo(function ThreadView({
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const prevThreadIdRef = useRef<string | null>(null);
   const isInitialLoadRef = useRef(true);
+  const turnItemsCacheRef = useRef(new WeakMap<Turn, CachedTurnItems>());
 
   useEffect(() => {
     if (prevThreadIdRef.current !== thread.id) {
@@ -140,7 +188,7 @@ export const ThreadView = memo(function ThreadView({
 
   const maxVisible = visiblePages * PAGE_SIZE;
   const { totalCount: totalItemCount, items: visibleItems } = useMemo(
-    () => collectVisibleThreadItems(thread.turns, maxVisible),
+    () => collectVisibleThreadItems(thread.turns, maxVisible, turnItemsCacheRef.current),
     [thread.turns, maxVisible],
   );
   const hiddenCount = Math.max(0, totalItemCount - visibleItems.length);
@@ -163,6 +211,10 @@ export const ThreadView = memo(function ThreadView({
 
   const lastTurn = thread.turns?.[thread.turns.length - 1];
   const isProcessing = overrideIsProcessing ?? Boolean(isSending || isAgentActive || lastTurn?.status === 'inProgress');
+  const streamingAgentItemId = useMemo(
+    () => findStreamingAgentItemId(thread.turns, isProcessing),
+    [thread.turns, isProcessing],
+  );
   const rawJson = useMemo(
     () => (showRawJson ? JSON.stringify(thread, null, 2) : ''),
     [showRawJson, thread],
@@ -259,7 +311,14 @@ export const ThreadView = memo(function ThreadView({
               <div className="tv-empty">{t('thread.noMessages')}</div>
             )
           ) : (
-            visibleItems.map(({ key, item }) => <ItemRenderer key={key} item={item} onResend={onResend} />)
+            visibleItems.map(({ key, item }) => (
+              <ItemRenderer
+                key={key}
+                item={item}
+                onResend={onResend}
+                isStreaming={item.type === 'agentMessage' && item.id === streamingAgentItemId}
+              />
+            ))
           )}
           {isProcessing && (
             <div className="tv-agent-row">
@@ -473,7 +532,12 @@ function renderToolResult(item: ThreadItem, t: TFunction): ReactNode {
           textParts.length = 0;
         }
         nodes.push(
-          <img key={`img-${nodes.length}`} src={entry.imageUrl} alt={t('thread.toolResult')} style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 4, display: 'block', marginBottom: 4 }} />
+          <img
+            key={`img-${nodes.length}`}
+            src={entry.imageUrl}
+            alt={t('thread.toolResult')}
+            className="tv-rendered-image tv-rendered-image--dense tv-rendered-image--spaced"
+          />
         );
       } else if (entry.text) {
         textParts.push(entry.text);
@@ -552,13 +616,21 @@ function renderWebSearchAction(item: ThreadItem): string | null {
   }
 }
 
-const ItemRenderer = memo(function ItemRenderer({ item, onResend }: { item: ThreadItem; onResend?: (text: string) => void }) {
+const ItemRenderer = memo(function ItemRenderer({
+  item,
+  onResend,
+  isStreaming = false,
+}: {
+  item: ThreadItem;
+  onResend?: (text: string) => void;
+  isStreaming?: boolean;
+}) {
   const { t } = useTranslation();
   switch (item.type) {
     case 'userMessage':
       return <UserMessage item={item} onResend={onResend} />;
     case 'agentMessage':
-      return <AgentMessage item={item} />;
+      return <AgentMessage item={item} isStreaming={isStreaming} />;
     case 'commandExecution':
       return <CommandExecution item={item} />;
     case 'fileChange':
@@ -659,12 +731,35 @@ const UserMessage = memo(function UserMessage({ item, onResend }: { item: Thread
 
 const MAX_AGENT_LINES = 60;
 
-const AgentMessage = memo(function AgentMessage({ item }: { item: ThreadItem }) {
+const AgentMessage = memo(function AgentMessage({
+  item,
+  isStreaming = false,
+}: {
+  item: ThreadItem;
+  isStreaming?: boolean;
+}) {
   const { t } = useTranslation();
   const text = extractText(item);
   const [expanded, setExpanded] = useState(false);
   if (!text) {
     return null;
+  }
+
+  if (isStreaming) {
+    return (
+      <div className="tv-agent-row">
+        <div className="tv-agent-bubble tv-markdown-body">
+          <div
+            style={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            {text}
+          </div>
+        </div>
+      </div>
+    );
   }
 
   const lines = text.split('\n');
@@ -897,7 +992,7 @@ const PlanItem = memo(function PlanItem({ item }: { item: ThreadItem }) {
         <span className="tv-cmd-prompt">#</span>
         <code className="tv-cmd-text">{t('thread.plan')}</code>
       </div>
-      <div className="tv-cmd-output" style={{ borderTop: '1px solid var(--border-subtle)', padding: '8px 12px' }}>
+      <div className="tv-cmd-body">
         <div className="tv-markdown-body">
           <Markdown>{text}</Markdown>
         </div>
@@ -1073,9 +1168,9 @@ function RealtimeAudioItem({ item }: { item: ThreadItem }) {
         <code className="tv-cmd-text">{t('thread.realtimeAudio')}</code>
         {item.status && <span className="tv-cmd-exit">{item.status}</span>}
       </div>
-      <div className="tv-cmd-output" style={{ borderTop: '1px solid var(--border-subtle)', padding: '8px 12px' }}>
+      <div className="tv-cmd-body">
         {item.text && (
-          <div style={{ color: 'var(--text-primary)', fontSize: 13, marginBottom: stats.length > 0 || itemId ? 8 : 0 }}>
+          <div className="tv-detail-value" style={{ marginBottom: stats.length > 0 || itemId ? 8 : 0 }}>
             {item.text}
           </div>
         )}
@@ -1128,10 +1223,10 @@ function WebSearchItem({ item }: { item: ThreadItem }) {
           {badge && <span className={`tv-tool-status ${badge.className}`}>{badge.label}</span>}
         </div>
       </div>
-      <div style={{ borderTop: '1px solid var(--border-subtle)', padding: '8px 12px' }}>
+      <div className="tv-cmd-body">
         {item.query && (
           <div style={{ marginBottom: detail ? 8 : 0 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 2 }}>{t('thread.query')}</div>
+            <div className="tv-detail-label">{t('thread.query')}</div>
             <div className="tv-markdown-body" style={{ fontSize: 13 }}>
               <Markdown>{item.query}</Markdown>
             </div>
@@ -1139,8 +1234,8 @@ function WebSearchItem({ item }: { item: ThreadItem }) {
         )}
         {detail && (
           <div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 2 }}>{t('thread.result')}</div>
-            <div style={{ color: 'var(--text-primary)', fontSize: 13, fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{detail}</div>
+            <div className="tv-detail-label">{t('thread.result')}</div>
+            <div className="tv-detail-value tv-detail-value--mono">{detail}</div>
           </div>
         )}
       </div>
@@ -1158,12 +1253,12 @@ function ImageViewItem({ item }: { item: ThreadItem }) {
             <img
               src={item.path}
               alt={t('thread.imageViewAlt')}
-              style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 8 }}
+              className="tv-rendered-image"
               onError={(event) => {
                 (event.target as HTMLImageElement).style.display = 'none';
               }}
             />
-            <div style={{ marginTop: 8, color: 'var(--text-tertiary)', fontSize: 12 }}>{item.path}</div>
+            <div className="tv-image-caption" style={{ marginTop: 8 }}>{item.path}</div>
           </>
         ) : (
           <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>{t('thread.imageViewed')}</span>
@@ -1182,11 +1277,11 @@ function ImageGenerationItem({ item }: { item: ThreadItem }) {
         <code className="tv-cmd-text">{t('thread.imageGeneration')}</code>
         {item.status && <span className="tv-cmd-exit">{item.status}</span>}
       </div>
-      <div className="tv-cmd-output" style={{ borderTop: '1px solid var(--border-subtle)', padding: '8px 12px' }}>
+      <div className="tv-cmd-body">
         {item.revisedPrompt && (
           <div style={{ marginBottom: 8 }}>
             <strong style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{t('thread.prompt')}</strong>
-            <div style={{ color: 'var(--text-primary)', fontSize: 13 }}>{item.revisedPrompt}</div>
+            <div className="tv-detail-value">{item.revisedPrompt}</div>
           </div>
         )}
         {item.path ? (
@@ -1194,10 +1289,10 @@ function ImageGenerationItem({ item }: { item: ThreadItem }) {
             <img
               src={item.path}
               alt={item.revisedPrompt ?? t('thread.generatedImage')}
-              style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 8, display: 'block', marginBottom: 4 }}
+              className="tv-rendered-image tv-rendered-image--spaced"
               onError={(event) => { (event.target as HTMLImageElement).style.display = 'none'; }}
             />
-            <div style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>{item.path}</div>
+            <div className="tv-image-caption">{item.path}</div>
           </>
         ) : null}
       </div>

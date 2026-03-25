@@ -418,6 +418,7 @@ export async function updateKanbanIssue(id: string, updates: {
 export async function deleteKanbanIssue(id: string): Promise<void> {
   await ensureKanbanTables();
   await rawExecute('DELETE FROM kanban_comments WHERE issue_id = ?1', [id]);
+  await rawExecute('DELETE FROM kanban_issue_runs WHERE issue_id = ?1', [id]);
   await rawExecute('DELETE FROM kanban_issues WHERE id = ?1', [id]);
 }
 
@@ -491,7 +492,11 @@ export async function listKanbanIssueRuns(issueId: string, limit = 20): Promise<
 export async function listRunningKanbanIssueRuns(): Promise<KanbanIssueRun[]> {
   await ensureKanbanTables();
   return rawSelect<KanbanIssueRun>(
-    'SELECT * FROM kanban_issue_runs WHERE status = ?1 AND thread_id IS NOT NULL ORDER BY created_at ASC',
+    `SELECT runs.*
+     FROM kanban_issue_runs runs
+     INNER JOIN kanban_issues issues ON issues.id = runs.issue_id
+     WHERE runs.status = ?1 AND runs.thread_id IS NOT NULL
+     ORDER BY runs.created_at ASC`,
     ['RUNNING']
   );
 }

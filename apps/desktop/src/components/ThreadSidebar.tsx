@@ -3,7 +3,8 @@ import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionState, ThreadSummary } from '@whats-coder/shared';
 
-type SidebarView = 'threads' | 'settings' | 'automations' | 'skills' | 'usage' | 'providers' | 'history' | 'kanban';
+
+type SidebarView = 'threads' | 'settings' | 'automations' | 'skills' | 'usage' | 'providers' | 'history' | 'workspace';
 
 type ThreadGroup = {
   folder: string;
@@ -34,7 +35,7 @@ type Props = {
   onOpenUsage: () => void;
   onOpenProviders: () => void;
   onOpenHistory: () => void;
-  onOpenKanban: () => void;
+  onOpenWorkspace: () => void;
   onOpenSettings: () => void;
   onAddProject: () => void | Promise<void>;
   showArchived: boolean;
@@ -324,42 +325,6 @@ const ThreadRow = memo(function ThreadRow({
   );
 });
 
-const SidebarSearchBar = memo(function SidebarSearchBar({
-  connected,
-  threadSearch,
-  onThreadSearchChange,
-  onClearThreadSearch,
-}: {
-  connected: boolean;
-  threadSearch: string;
-  onThreadSearchChange: (value: string) => void;
-  onClearThreadSearch: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className={`sidebar-search${connected ? '' : ' sidebar-search--disabled'}`}>
-      <svg className="sidebar-search-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="7" cy="7" r="5" />
-        <path d="M11 11l3.5 3.5" />
-      </svg>
-      <input
-        className="sidebar-search-input"
-        value={threadSearch}
-        onChange={(event) => onThreadSearchChange(event.target.value)}
-        placeholder={connected ? t('sidebar.searchThreads') : t('sidebar.waitingForConnection')}
-        disabled={!connected}
-      />
-      {connected && threadSearch && (
-        <button className="sidebar-search-clear" onClick={onClearThreadSearch}>
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-            <line x1="2" y1="2" x2="8" y2="8" />
-            <line x1="8" y1="2" x2="2" y2="8" />
-          </svg>
-        </button>
-      )}
-    </div>
-  );
-});
 
 export const ThreadSidebar = memo(function ThreadSidebar({
   width,
@@ -372,7 +337,7 @@ export const ThreadSidebar = memo(function ThreadSidebar({
   onOpenUsage,
   onOpenProviders,
   onOpenHistory,
-  onOpenKanban,
+  onOpenWorkspace,
   onOpenSettings,
   onAddProject,
   showArchived,
@@ -427,6 +392,8 @@ export const ThreadSidebar = memo(function ThreadSidebar({
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [moreMenuPos, setMoreMenuPos] = useState<{ top: number; left: number } | null>(null);
   const moreMenuBtnRef = useRef<HTMLButtonElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [timelineVisibleThreadLimit, setTimelineVisibleThreadLimit] = useState(INITIAL_THREAD_LIMIT);
   const [groupVisibleThreadLimits, setGroupVisibleThreadLimits] = useState<Record<string, number>>({});
 
@@ -502,7 +469,6 @@ export const ThreadSidebar = memo(function ThreadSidebar({
         <button
           className={`sidebar-nav-btn${sidebarView === 'automations' ? ' sidebar-nav-btn--active' : ''}`}
           onClick={onOpenAutomations}
-          disabled={connState !== 'connected'}
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M8 2v4l2.5 1.5" />
@@ -513,7 +479,6 @@ export const ThreadSidebar = memo(function ThreadSidebar({
         <button
           className={`sidebar-nav-btn${sidebarView === 'skills' ? ' sidebar-nav-btn--active' : ''}`}
           onClick={() => { void onOpenSkills(); }}
-          disabled={connState !== 'connected'}
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="2" width="5" height="5" rx="1" />
@@ -556,120 +521,153 @@ export const ThreadSidebar = memo(function ThreadSidebar({
           </svg>
           {t('sidebar.history')}
         </button>
-        <button
-          className={`sidebar-nav-btn${sidebarView === 'kanban' ? ' sidebar-nav-btn--active' : ''}`}
-          onClick={onOpenKanban}
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="1" y="3" width="4" height="10" rx="1" />
-            <rect x="6" y="3" width="4" height="7" rx="1" />
-            <rect x="11" y="3" width="4" height="9" rx="1" />
-          </svg>
-          {t('sidebar.kanban')}
-        </button>
+        <div className="sidebar-nav-group">
+          <button
+            className={`sidebar-nav-btn${sidebarView === 'workspace' ? ' sidebar-nav-btn--active' : ''}`}
+            onClick={onOpenWorkspace}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="2" width="5" height="5" rx="1" />
+              <rect x="9" y="2" width="5" height="5" rx="1" />
+              <rect x="2" y="9" width="5" height="5" rx="1" />
+              <path d="M11.5 9.5h2.5" />
+              <path d="M12.75 8.25v2.5" />
+            </svg>
+            {t('workspacePage.title')}
+          </button>
+        </div>
       </nav>
 
       <div className="sidebar-divider" />
 
       <div className="sidebar-threads-header">
-        <span className="sidebar-threads-label">{t('sidebar.threads')}</span>
-        <div className="sidebar-threads-actions">
-          <button
-            className="sidebar-icon-btn"
-            onClick={() => { void onAddProject(); }}
-            title={t('sidebar.addProjectFolder')}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
-              <line x1="8" y1="8" x2="8" y2="12" />
-              <line x1="6" y1="10" x2="10" y2="10" />
-            </svg>
-          </button>
-          <div>
+        {searchOpen ? (
+          <div className="sidebar-search-inline">
+            <input
+              ref={searchInputRef}
+              className="sidebar-search-inline-input"
+              value={threadSearch}
+              onChange={(e) => onThreadSearchChange(e.target.value)}
+              placeholder={t('sidebar.searchThreads')}
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Escape') { setSearchOpen(false); onClearThreadSearch(); } }}
+            />
             <button
-              ref={moreMenuBtnRef}
-              className={`sidebar-icon-btn${moreMenuOpen ? ' sidebar-icon-btn--active' : ''}`}
-              onClick={() => {
-                if (!moreMenuOpen && moreMenuBtnRef.current) {
-                  const rect = moreMenuBtnRef.current.getBoundingClientRect();
-                  setMoreMenuPos({ top: rect.bottom + 4, left: Math.max(rect.right - 180, 8) });
-                }
-                setMoreMenuOpen(!moreMenuOpen);
-              }}
-              title={t('sidebar.moreOptions')}
+              className="sidebar-icon-btn"
+              onClick={() => { setSearchOpen(false); onClearThreadSearch(); }}
+              title={t('sidebar.closeSearch')}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                <circle cx="8" cy="3" r="1.3" />
-                <circle cx="8" cy="8" r="1.3" />
-                <circle cx="8" cy="13" r="1.3" />
+              <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <line x1="2" y1="2" x2="8" y2="8" />
+                <line x1="8" y1="2" x2="2" y2="8" />
               </svg>
             </button>
-            {moreMenuOpen && moreMenuPos && (
-              <>
-                <div className="ctx-backdrop" onClick={() => setMoreMenuOpen(false)} />
-                <div className="ctx-menu" style={{ top: moreMenuPos.top, left: moreMenuPos.left }}>
-                  <div className="ctx-menu-group-label">{t('sidebar.viewLabel')}</div>
-                  <button className={`ctx-menu-item${viewMode === 'project' ? ' ctx-menu-item--checked' : ''}`} onClick={() => { onViewModeChange('project'); setMoreMenuOpen(false); }}>
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
-                    </svg>
-                    {t('sidebar.viewByProject')}
-                    {viewMode === 'project' && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 'auto' }}><path d="M2.5 6l2.5 2.5 4.5-5" /></svg>}
-                  </button>
-                  <button className={`ctx-menu-item${viewMode === 'timeline' ? ' ctx-menu-item--checked' : ''}`} onClick={() => { onViewModeChange('timeline'); setMoreMenuOpen(false); }}>
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M3 4h10M3 8h10M3 12h10" />
-                    </svg>
-                    {t('sidebar.viewByTime')}
-                    {viewMode === 'timeline' && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 'auto' }}><path d="M2.5 6l2.5 2.5 4.5-5" /></svg>}
-                  </button>
-
-                  <div className="ctx-menu-sep" />
-                  <div className="ctx-menu-group-label">{t('sidebar.sortLabel')}</div>
-                  <button className={`ctx-menu-item${sortBy === 'updated' ? ' ctx-menu-item--checked' : ''}`} onClick={() => { onSortByChange('updated'); setMoreMenuOpen(false); }}>
-                    {t('sidebar.sortUpdated')}
-                    {sortBy === 'updated' && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 'auto' }}><path d="M2.5 6l2.5 2.5 4.5-5" /></svg>}
-                  </button>
-                  <button className={`ctx-menu-item${sortBy === 'created' ? ' ctx-menu-item--checked' : ''}`} onClick={() => { onSortByChange('created'); setMoreMenuOpen(false); }}>
-                    {t('sidebar.sortCreated')}
-                    {sortBy === 'created' && <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 'auto' }}><path d="M2.5 6l2.5 2.5 4.5-5" /></svg>}
-                  </button>
-
-                  <div className="ctx-menu-sep" />
-                  <button className={`ctx-menu-item${showArchived ? ' ctx-menu-item--checked' : ''}`} onClick={() => { onToggleArchived(); setMoreMenuOpen(false); }}>
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="2" y="3" width="12" height="3" rx="1" />
-                      <path d="M3 6v6a1 1 0 001 1h8a1 1 0 001-1V6" />
-                      <path d="M6.5 9h3" />
-                    </svg>
-                    {showArchived ? t('sidebar.hideArchived') : t('sidebar.showArchived')}
-                  </button>
-                  <button className="ctx-menu-item" onClick={() => { void onRefreshThreads(); setMoreMenuOpen(false); }}>
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-                      <path d="M2.5 8a5.5 5.5 0 0 1 9.3-4" strokeLinecap="round" />
-                      <path d="M13.5 8a5.5 5.5 0 0 1-9.3 4" strokeLinecap="round" />
-                      <polyline points="12,2 12,5 9,5" strokeLinecap="round" strokeLinejoin="round" />
-                      <polyline points="4,14 4,11 7,11" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                    {t('sidebar.refresh')}
-                  </button>
-                </div>
-              </>
-            )}
           </div>
-        </div>
-      </div>
+        ) : (
+          <>
+            <span className="sidebar-threads-label">{t('sidebar.threads')}</span>
+            <div className="sidebar-threads-actions">
+              <button
+                className="sidebar-icon-btn"
+                onClick={() => { void onAddProject(); }}
+                title={t('sidebar.addProjectFolder')}
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
+                  <line x1="8" y1="8" x2="8" y2="12" />
+                  <line x1="6" y1="10" x2="10" y2="10" />
+                </svg>
+              </button>
+              <div>
+                <button
+                  ref={moreMenuBtnRef}
+                  className={`sidebar-icon-btn${moreMenuOpen ? ' sidebar-icon-btn--active' : ''}`}
+                  onClick={() => {
+                    if (!moreMenuOpen && moreMenuBtnRef.current) {
+                      const rect = moreMenuBtnRef.current.getBoundingClientRect();
+                      setMoreMenuPos({ top: rect.bottom + 4, left: Math.max(rect.right - 180, 8) });
+                    }
+                    setMoreMenuOpen(!moreMenuOpen);
+                  }}
+                  title={t('sidebar.moreOptions')}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                    <circle cx="8" cy="3" r="1.3" />
+                    <circle cx="8" cy="8" r="1.3" />
+                    <circle cx="8" cy="13" r="1.3" />
+                  </svg>
+                </button>
+                {moreMenuOpen && moreMenuPos && (
+                  <>
+                    <div className="ctx-backdrop" onClick={() => setMoreMenuOpen(false)} />
+                    <div className="ctx-menu" style={{ top: moreMenuPos.top, left: moreMenuPos.left }}>
+                      <div className="ctx-menu-group-label">{t('sidebar.viewLabel')}</div>
+                      <button className={`ctx-menu-item${viewMode === 'project' ? ' ctx-menu-item--checked' : ''}`} onClick={() => { onViewModeChange('project'); setMoreMenuOpen(false); }}>
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M2 4.5V12a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6.5A1.5 1.5 0 0012.5 5H8L6.5 3H3.5A1.5 1.5 0 002 4.5z" />
+                        </svg>
+                        {t('sidebar.viewByProject')}
+                        {viewMode === 'project' && <svg className="ctx-menu-check" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 6l2.5 2.5 4.5-5" /></svg>}
+                      </button>
+                      <button className={`ctx-menu-item${viewMode === 'timeline' ? ' ctx-menu-item--checked' : ''}`} onClick={() => { onViewModeChange('timeline'); setMoreMenuOpen(false); }}>
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 4h10M3 8h10M3 12h10" />
+                        </svg>
+                        {t('sidebar.viewByTime')}
+                        {viewMode === 'timeline' && <svg className="ctx-menu-check" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 6l2.5 2.5 4.5-5" /></svg>}
+                      </button>
 
-      <SidebarSearchBar
-        connected={connState === 'connected'}
-        threadSearch={threadSearch}
-        onThreadSearchChange={onThreadSearchChange}
-        onClearThreadSearch={onClearThreadSearch}
-      />
+                      <div className="ctx-menu-sep" />
+                      <div className="ctx-menu-group-label">{t('sidebar.sortLabel')}</div>
+                      <button className={`ctx-menu-item${sortBy === 'updated' ? ' ctx-menu-item--checked' : ''}`} onClick={() => { onSortByChange('updated'); setMoreMenuOpen(false); }}>
+                        {t('sidebar.sortUpdated')}
+                        {sortBy === 'updated' && <svg className="ctx-menu-check" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 6l2.5 2.5 4.5-5" /></svg>}
+                      </button>
+                      <button className={`ctx-menu-item${sortBy === 'created' ? ' ctx-menu-item--checked' : ''}`} onClick={() => { onSortByChange('created'); setMoreMenuOpen(false); }}>
+                        {t('sidebar.sortCreated')}
+                        {sortBy === 'created' && <svg className="ctx-menu-check" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--accent-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 6l2.5 2.5 4.5-5" /></svg>}
+                      </button>
+
+                      <div className="ctx-menu-sep" />
+                      <button className={`ctx-menu-item${showArchived ? ' ctx-menu-item--checked' : ''}`} onClick={() => { onToggleArchived(); setMoreMenuOpen(false); }}>
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="2" y="3" width="12" height="3" rx="1" />
+                          <path d="M3 6v6a1 1 0 001 1h8a1 1 0 001-1V6" />
+                          <path d="M6.5 9h3" />
+                        </svg>
+                        {showArchived ? t('sidebar.hideArchived') : t('sidebar.showArchived')}
+                      </button>
+                      <button className="ctx-menu-item" onClick={() => { void onRefreshThreads(); setMoreMenuOpen(false); }}>
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                          <path d="M2.5 8a5.5 5.5 0 0 1 9.3-4" strokeLinecap="round" />
+                          <path d="M13.5 8a5.5 5.5 0 0 1-9.3 4" strokeLinecap="round" />
+                          <polyline points="12,2 12,5 9,5" strokeLinecap="round" strokeLinejoin="round" />
+                          <polyline points="4,14 4,11 7,11" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        {t('sidebar.refresh')}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+              <button
+                className={`sidebar-icon-btn${threadSearch ? ' sidebar-icon-btn--active' : ''}`}
+                onClick={() => { setSearchOpen(true); }}
+                title={t('sidebar.searchThreads')}
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="7" cy="7" r="5" />
+                  <path d="M11 11l3.5 3.5" />
+                </svg>
+              </button>
+            </div>
+          </>
+        )}
+      </div>
 
       <div className="sidebar-thread-list">
         {threadCount === 0 && connState === 'connected' && (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
+          <div className="sidebar-thread-empty">
             {t('sidebar.noThreadsYet')}
           </div>
         )}
@@ -829,8 +827,11 @@ export const ThreadSidebar = memo(function ThreadSidebar({
           const hasMoreLocal = viewMode === 'timeline'
             ? threadGroups.flatMap((group) => group.threads).length > timelineVisibleThreadLimit
             : threadGroups.some((group) => group.threads.length > getVisibleThreadLimitForGroup(group));
+          const canShowServerLoadMore = viewMode === 'timeline'
+            ? hasLoadedThreads
+            : threadGroups.some((group) => group.threads.length > INITIAL_THREAD_LIMIT);
 
-          return !hasLoadedThreads || !hasMoreLocal ? (
+          return !hasLoadedThreads || (!hasMoreLocal && canShowServerLoadMore) ? (
           nextCursor && (
             <button
               className="sidebar-load-more"

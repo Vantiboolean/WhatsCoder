@@ -91,13 +91,6 @@ export function McpSettingsPanel({ mcpServers, client, onRefresh }: {
     setRemovingServer(null);
   };
 
-  const inputStyle: React.CSSProperties = {
-    width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12,
-    background: 'var(--bg-secondary)', color: 'var(--text-primary)',
-    border: '1px solid var(--border-default)', borderRadius: 6,
-    padding: '6px 10px', boxSizing: 'border-box',
-  };
-
   return (
     <div className="settings-panel">
       <h2>MCP Servers</h2>
@@ -107,32 +100,31 @@ export function McpSettingsPanel({ mcpServers, client, onRefresh }: {
         <div className="settings-section">
           <h3>Servers ({mcpServers.length})</h3>
           {mcpServers.map((s) => (
-            <div key={s.name} className="settings-row" style={{ alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+            <div key={s.name} className="settings-row">
+              <div className="conn-saved-main">
                 <span className={`sidebar-conn-dot sidebar-conn-dot--${s.status === 'running' ? 'connected' : 'disconnected'}`} />
-                <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</label>
+                <span className="mcp-mono-ellipsis">{s.name}</span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                <span style={{ fontSize: 11, color: s.status === 'running' ? 'var(--status-active)' : 'var(--text-tertiary)', textTransform: 'capitalize', minWidth: 52, textAlign: 'right' }}>
+              <div className="mcp-server-actions">
+                <span className={`mcp-status ${s.status === 'running' ? 'mcp-status--active' : 'mcp-status--idle'}`}>
                   {s.status}
                 </span>
                 <button
-                  className="btn-small"
+                  className="btn-small mcp-btn-toggle"
                   disabled={togglingServer === s.name}
                   onClick={() => handleToggle(s.name, s.status)}
-                  style={{ minWidth: 60, fontSize: 11 }}
                 >
                   {togglingServer === s.name ? '...' : s.status === 'running' ? 'Disable' : 'Enable'}
                 </button>
                 {confirmRemove === s.name ? (
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <button className="btn-small" style={{ fontSize: 11, color: 'var(--status-error)' }} disabled={removingServer === s.name} onClick={() => handleRemove(s.name)}>
+                  <div className="conn-input-row">
+                    <button className="btn-small conn-btn-danger-text" disabled={removingServer === s.name} onClick={() => handleRemove(s.name)}>
                       {removingServer === s.name ? '...' : 'Confirm'}
                     </button>
-                    <button className="btn-small" style={{ fontSize: 11 }} onClick={() => setConfirmRemove(null)}>Cancel</button>
+                    <button className="btn-small" onClick={() => setConfirmRemove(null)}>Cancel</button>
                   </div>
                 ) : (
-                  <button className="btn-small" style={{ fontSize: 11 }} onClick={() => setConfirmRemove(s.name)}>Remove</button>
+                  <button className="btn-small" onClick={() => setConfirmRemove(s.name)}>Remove</button>
                 )}
               </div>
             </div>
@@ -140,7 +132,7 @@ export function McpSettingsPanel({ mcpServers, client, onRefresh }: {
         </div>
       ) : (
         <div className="empty-section-card">
-          <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
+          <span className="conn-empty-hint">
             No MCP servers configured. Add one below or configure servers in your Codex config.
           </span>
         </div>
@@ -150,15 +142,15 @@ export function McpSettingsPanel({ mcpServers, client, onRefresh }: {
         {showAddForm ? (
           <>
             <h3>Add MCP Server</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Server Name *</label>
-                  <input style={inputStyle} value={addName} onChange={e => setAddName(e.target.value)} placeholder="e.g. my-server" />
+            <div className="mcp-stack">
+              <div className="conn-actions-row">
+                <div className="mcp-flex-1-min0">
+                  <label className="mcp-field-label">Server Name *</label>
+                  <input className="conn-input" value={addName} onChange={e => setAddName(e.target.value)} placeholder="e.g. my-server" />
                 </div>
-                <div style={{ width: 120 }}>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Type</label>
-                  <select value={addType} onChange={e => setAddType(e.target.value as 'stdio' | 'sse')} style={{ ...inputStyle, cursor: 'pointer' }}>
+                <div className="mcp-field-type">
+                  <label className="mcp-field-label">Type</label>
+                  <select value={addType} onChange={e => setAddType(e.target.value as 'stdio' | 'sse')} className="conn-input mcp-select">
                     <option value="stdio">stdio</option>
                     <option value="sse">SSE (HTTP)</option>
                   </select>
@@ -168,25 +160,25 @@ export function McpSettingsPanel({ mcpServers, client, onRefresh }: {
               {addType === 'stdio' ? (
                 <>
                   <div>
-                    <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Command *</label>
-                    <input style={inputStyle} value={addCommand} onChange={e => setAddCommand(e.target.value)} placeholder="e.g. npx, uvx, node" />
+                    <label className="mcp-field-label">Command *</label>
+                    <input className="conn-input" value={addCommand} onChange={e => setAddCommand(e.target.value)} placeholder="e.g. npx, uvx, node" />
                   </div>
                   <div>
-                    <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Arguments (space-separated)</label>
-                    <input style={inputStyle} value={addArgs} onChange={e => setAddArgs(e.target.value)} placeholder="e.g. -y @modelcontextprotocol/server-filesystem ." />
+                    <label className="mcp-field-label">Arguments (space-separated)</label>
+                    <input className="conn-input" value={addArgs} onChange={e => setAddArgs(e.target.value)} placeholder="e.g. -y @modelcontextprotocol/server-filesystem ." />
                   </div>
                 </>
               ) : (
                 <div>
-                  <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>URL *</label>
-                  <input style={inputStyle} value={addUrl} onChange={e => setAddUrl(e.target.value)} placeholder="e.g. http://localhost:3001/sse" />
+                  <label className="mcp-field-label">URL *</label>
+                  <input className="conn-input" value={addUrl} onChange={e => setAddUrl(e.target.value)} placeholder="e.g. http://localhost:3001/sse" />
                 </div>
               )}
 
               <div>
-                <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>Environment Variables (one per line: KEY=VALUE)</label>
+                <label className="mcp-field-label">Environment Variables (one per line: KEY=VALUE)</label>
                 <textarea
-                  style={{ ...inputStyle, resize: 'vertical', minHeight: 48 }}
+                  className="conn-input mcp-textarea"
                   rows={2}
                   value={addEnvText}
                   onChange={e => setAddEnvText(e.target.value)}
@@ -194,9 +186,9 @@ export function McpSettingsPanel({ mcpServers, client, onRefresh }: {
                 />
               </div>
 
-              {error && <div style={{ color: 'var(--status-error)', fontSize: 12 }}>{error}</div>}
+              {error && <div className="mcp-error">{error}</div>}
 
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div className="conn-actions-row">
                 <button className="btn-small btn-primary" disabled={saving} onClick={handleAdd}>
                   {saving ? 'Adding...' : 'Add Server'}
                 </button>
@@ -205,7 +197,7 @@ export function McpSettingsPanel({ mcpServers, client, onRefresh }: {
             </div>
           </>
         ) : (
-          <button className="btn-small btn-primary" onClick={() => setShowAddForm(true)} style={{ marginTop: 4 }}>
+          <button className="btn-small btn-primary mcp-add-server-btn" onClick={() => setShowAddForm(true)}>
             + Add MCP Server
           </button>
         )}
@@ -213,7 +205,7 @@ export function McpSettingsPanel({ mcpServers, client, onRefresh }: {
 
       <div className="settings-section">
         <h3>Recommended</h3>
-        <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
+        <p className="mcp-rec-intro">
           Popular MCP servers you can add with one click.
         </p>
         {[
@@ -224,9 +216,9 @@ export function McpSettingsPanel({ mcpServers, client, onRefresh }: {
           const isInstalled = mcpServers.some(s => s.name === rec.name);
           return (
             <div key={rec.name} className="settings-row">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{rec.name}</label>
-                <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{rec.desc}</span>
+              <div className="mcp-rec-body">
+                <span className="mcp-rec-title">{rec.name}</span>
+                <span className="mcp-rec-desc">{rec.desc}</span>
               </div>
               <button
                 className="btn-small"

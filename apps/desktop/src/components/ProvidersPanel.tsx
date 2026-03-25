@@ -11,6 +11,7 @@ import {
   type ProviderAppType,
   type ProviderRow,
 } from '../lib/db';
+import { DesktopEmptyState, DesktopPageShell } from './DesktopPageShell';
 import { ProviderCard } from './ProviderCard';
 import { ProviderDialog, type ProviderFormData, sanitizeClaudeConfig } from './ProviderDialog';
 
@@ -20,11 +21,14 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+import type { ReactNode } from 'react';
+
 type Props = {
   onToast?: (msg: string, type: 'info' | 'error' | 'success') => void;
+  windowControls?: ReactNode;
 };
 
-export function ProvidersPanel({ onToast }: Props) {
+export function ProvidersPanel({ onToast, windowControls }: Props) {
   const { t } = useTranslation();
   const [activeApp, setActiveApp] = useState<ProviderAppType>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -231,78 +235,81 @@ export function ProvidersPanel({ onToast }: Props) {
   }, [activeApp, refresh, toast]);
 
   return (
-    <div className="providers-panel">
-      <div className="providers-header" data-tauri-drag-region>
-        <h2>{t('providers.title')}</h2>
-      </div>
-
-      <div className="providers-tabs-row">
-        <div className="providers-tabs">
-          <button
-            className={`providers-tab${activeApp === 'claude' ? ' providers-tab--active' : ''}`}
-            onClick={() => handleSwitchApp('claude')}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="8" cy="8" r="6" />
-              <path d="M5.5 8.5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5" />
-            </svg>
-            {t('providers.claude')}
-          </button>
-          <button
-            className={`providers-tab${activeApp === 'codex' ? ' providers-tab--active' : ''}`}
-            onClick={() => handleSwitchApp('codex')}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="10" height="10" rx="2" />
-              <path d="M6 6l4 4M10 6l-4 4" />
-            </svg>
-            {t('providers.codex')}
-          </button>
+    <DesktopPageShell
+      className="providers-panel"
+      title={t('providers.title')}
+      windowControls={windowControls}
+      toolbar={(
+        <div className="providers-tabs-row">
+          <div className="providers-tabs">
+            <button
+              className={`providers-tab${activeApp === 'claude' ? ' providers-tab--active' : ''}`}
+              onClick={() => handleSwitchApp('claude')}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="8" cy="8" r="6" />
+                <path d="M5.5 8.5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5" />
+              </svg>
+              {t('providers.claude')}
+            </button>
+            <button
+              className={`providers-tab${activeApp === 'codex' ? ' providers-tab--active' : ''}`}
+              onClick={() => handleSwitchApp('codex')}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="10" height="10" rx="2" />
+                <path d="M6 6l4 4M10 6l-4 4" />
+              </svg>
+              {t('providers.codex')}
+            </button>
+          </div>
+          <div className="providers-toolbar">
+            <button className="providers-toolbar-btn providers-toolbar-btn--primary" onClick={() => setDialogOpen(true)}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <line x1="8" y1="3" x2="8" y2="13" /><line x1="3" y1="8" x2="13" y2="8" />
+              </svg>
+              {t('common.add')}
+            </button>
+            <button className="providers-toolbar-btn" onClick={handleImportCurrent}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 3v7M5 7l3 3 3-3" /><path d="M3 12h10" />
+              </svg>
+              {t('common.import')}
+            </button>
+          </div>
         </div>
-        <div className="providers-toolbar">
-          <button className="providers-toolbar-btn providers-toolbar-btn--primary" onClick={() => setDialogOpen(true)}>
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <line x1="8" y1="3" x2="8" y2="13" /><line x1="3" y1="8" x2="13" y2="8" />
-            </svg>
-            {t('common.add')}
-          </button>
-          <button className="providers-toolbar-btn" onClick={handleImportCurrent}>
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 3v7M5 7l3 3 3-3" /><path d="M3 12h10" />
-            </svg>
-            {t('common.import')}
-          </button>
-        </div>
-      </div>
-
-      <div className="providers-list">
-        {providers.length === 0 ? (
-          <div className="provider-empty-state">
-            <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="6" y="6" width="28" height="28" rx="6" />
-              <line x1="20" y1="14" x2="20" y2="26" /><line x1="14" y1="20" x2="26" y2="20" />
-            </svg>
-            <div>
-              {t('providers.noProviders', {
+      )}
+    >
+      <div className="desktop-page-surface desktop-page-surface--scroll">
+        <div className="providers-list">
+          {providers.length === 0 ? (
+            <DesktopEmptyState
+              icon={(
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="6" y="6" width="28" height="28" rx="6" />
+                  <line x1="20" y1="14" x2="20" y2="26" /><line x1="14" y1="20" x2="26" y2="20" />
+                </svg>
+              )}
+              title={t('providers.noProviders', {
                 app: t(activeApp === 'claude' ? 'providers.claude' : 'providers.codex'),
               })}
-            </div>
-            <div>{t('providers.clickAddToCreate')}</div>
-          </div>
-        ) : (
-          providers.map(p => (
-            <ProviderCard
-              key={p.id}
-              provider={p}
-              isCurrent={p.id === currentId}
-              appType={activeApp}
-              onSwitch={handleSwitch}
-              onEdit={handleEdit}
-              onDelete={setConfirmDelete}
-              onDuplicate={handleDuplicate}
+              description={t('providers.clickAddToCreate')}
             />
-          ))
-        )}
+          ) : (
+            providers.map(p => (
+              <ProviderCard
+                key={p.id}
+                provider={p}
+                isCurrent={p.id === currentId}
+                appType={activeApp}
+                onSwitch={handleSwitch}
+                onEdit={handleEdit}
+                onDelete={setConfirmDelete}
+                onDuplicate={handleDuplicate}
+              />
+            ))
+          )}
+        </div>
       </div>
 
       <ProviderDialog
@@ -349,6 +356,6 @@ export function ProvidersPanel({ onToast }: Props) {
           </div>
         </div>
       )}
-    </div>
+    </DesktopPageShell>
   );
 }

@@ -12,6 +12,7 @@ import {
   type KanbanComment,
   type KanbanIssueRun,
 } from '../../lib/kanbanDb';
+import type { WorkspaceSectionId } from '../WorkspacePanel';
 import { PRIORITY_I18N, EXECUTION_STATE_I18N, genId, formatDate, formatDateTime } from './kanban-helpers';
 
 export function IssueDialog({
@@ -20,6 +21,7 @@ export function IssueDialog({
   onSave,
   onCommentsChanged,
   onOpenExecution,
+  onOpenWorkspace,
   onRerun,
   canExecute,
   onClose,
@@ -29,6 +31,7 @@ export function IssueDialog({
   onSave: (data: { title: string; description: string; priority: KanbanPriority; tags: string; status: KanbanStatus; startDate: string; dueDate: string }) => void;
   onCommentsChanged?: (issueId: string, count: number) => void;
   onOpenExecution?: (issue: KanbanIssue) => void;
+  onOpenWorkspace?: (issue: KanbanIssue, section: WorkspaceSectionId) => void;
   onRerun?: (issue: KanbanIssue) => void;
   canExecute?: boolean;
   onClose: () => void;
@@ -287,6 +290,24 @@ export function IssueDialog({
             </span>
           )}
           <div className="kanban-dialog-actions">
+            {issue && onOpenWorkspace && (
+              <button
+                type="button"
+                className="kanban-dialog-btn kanban-dialog-btn--secondary"
+                onClick={() => { onOpenWorkspace(issue, 'tasks'); onClose(); }}
+              >
+                {t('kanban.openWorkspaceTasks')}
+              </button>
+            )}
+            {issue?.linked_thread_id && onOpenWorkspace && (
+              <button
+                type="button"
+                className="kanban-dialog-btn kanban-dialog-btn--secondary"
+                onClick={() => { onOpenWorkspace(issue, 'runtime'); onClose(); }}
+              >
+                {t('kanban.openWorkspaceRuntime')}
+              </button>
+            )}
             {issue?.linked_thread_id && onOpenExecution && (
               <button
                 type="button"

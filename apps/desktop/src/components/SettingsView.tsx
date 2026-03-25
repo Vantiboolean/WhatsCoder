@@ -13,6 +13,7 @@ import {
   folderName,
 } from '../lib/settingsHelpers';
 import { ConnectionsPanel } from './ConnectionsPanel';
+import { DesktopPageShell } from './DesktopPageShell';
 import { McpSettingsPanel } from './McpSettingsPanel';
 
 export function SettingsView({
@@ -54,6 +55,7 @@ export function SettingsView({
   onStartServer,
   onStopServer,
   onBrowseCodexBinary,
+  windowControls,
 }: {
   url: string;
   onUrlChange: (url: string) => void;
@@ -93,6 +95,7 @@ export function SettingsView({
   onStartServer?: () => void;
   onStopServer?: () => void;
   onBrowseCodexBinary?: () => void;
+  windowControls?: import('react').ReactNode;
 }) {
   const { t, i18n } = useTranslation();
   const [tab, setTab] = useState<SettingsTab>('general');
@@ -190,25 +193,32 @@ export function SettingsView({
   }, [tab, connState, client]);
 
   return (
-    <div className="settings-layout">
-      <nav className="settings-tabs">
-        {SETTINGS_TAB_KEYS.map((tabDef) => (
-          <button
-            key={tabDef.id}
-            className={`settings-tab${tab === tabDef.id ? ' settings-tab--active' : ''}`}
-            onClick={() => setTab(tabDef.id)}
-          >
-            {t(tabDef.key)}
-          </button>
-        ))}
-      </nav>
-      <div className="settings-content">
+    <DesktopPageShell
+      className="settings-page"
+      bodyClassName="settings-page__body"
+      title="Settings"
+      windowControls={windowControls}
+    >
+      <div className="desktop-page-surface desktop-page-surface--no-padding settings-shell">
+        <div className="settings-layout">
+          <nav className="settings-tabs">
+            {SETTINGS_TAB_KEYS.map((tabDef) => (
+              <button
+                key={tabDef.id}
+                className={`settings-tab${tab === tabDef.id ? ' settings-tab--active' : ''}`}
+                onClick={() => setTab(tabDef.id)}
+              >
+                {t(tabDef.key)}
+              </button>
+            ))}
+          </nav>
+          <div className="settings-content">
         {tab === 'general' && (
           <div className="settings-panel">
             <h2>{t('settings.general')}</h2>
             <div className="settings-section">
               <h3>{t('settings.language')}</h3>
-              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8 }}>
+              <p className="settings-hint">
                 {t('settings.languageDesc')}
               </p>
               <div className="settings-row">
@@ -236,12 +246,14 @@ export function SettingsView({
               </div>
               <div className="settings-row">
                 <label>{t('settings.status')}</label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{
-                    fontSize: 13,
-                    color: connState === 'connected' ? 'var(--status-active)' : connState === 'connecting' ? 'var(--status-warning)' : 'var(--text-tertiary)',
-                    textTransform: 'capitalize',
-                  }}>
+                <div className="settings-inline-row">
+                  <span
+                    className="settings-value--capitalize"
+                    style={{
+                      fontSize: 13,
+                      color: connState === 'connected' ? 'var(--status-active)' : connState === 'connecting' ? 'var(--status-warning)' : 'var(--text-tertiary)',
+                    }}
+                  >
                     {connState}
                   </span>
                   {connState === 'connected' ? (
@@ -268,7 +280,7 @@ export function SettingsView({
                 {accountInfo.planType && (
                   <div className="settings-row">
                     <label>{t('settings.plan')}</label>
-                    <span className="settings-value" style={{ textTransform: 'capitalize' }}>
+                    <span className="settings-value settings-value--capitalize">
                       {accountInfo.planType}
                     </span>
                   </div>
@@ -287,7 +299,7 @@ export function SettingsView({
                 {rateLimits.planType && (
                   <div className="settings-row">
                     <label>{t('settings.planSnapshot')}</label>
-                    <span className="settings-value" style={{ textTransform: 'capitalize' }}>
+                    <span className="settings-value settings-value--capitalize">
                       {rateLimits.planType}
                     </span>
                   </div>
@@ -379,7 +391,7 @@ export function SettingsView({
             <h2>{t('settings.appearance')}</h2>
             <div className="settings-section">
               <h3>{t('settings.theme')}</h3>
-              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8 }}>
+              <p className="settings-hint">
                 {t('settings.themeDesc')}
               </p>
               <div className="settings-theme-row">
@@ -508,7 +520,7 @@ export function SettingsView({
               <div className="settings-row">
                 <div>
                   <label>{t('settings.pointerCursor')}</label>
-                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  <p className="settings-field-desc">
                     {t('settings.pointerCursorDesc')}
                   </p>
                 </div>
@@ -520,7 +532,7 @@ export function SettingsView({
               <div className="settings-row">
                 <div>
                   <label>{t('settings.uiFontSize')}</label>
-                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  <p className="settings-field-desc">
                     {t('settings.uiFontSizeDesc')}
                   </p>
                 </div>
@@ -533,7 +545,7 @@ export function SettingsView({
               <div className="settings-row">
                 <div>
                   <label>{t('settings.codeFontSize')}</label>
-                  <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  <p className="settings-field-desc">
                     {t('settings.codeFontSizeDesc')}
                   </p>
                 </div>
@@ -612,7 +624,7 @@ export function SettingsView({
                   </span>
                 )}
               </div>
-              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+              <p className="settings-field-note">
                 Controls when Codex asks for user approval before executing commands.
               </p>
             </div>
@@ -640,14 +652,14 @@ export function SettingsView({
                   </span>
                 )}
               </div>
-              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+              <p className="settings-field-note">
                 Controls what level of filesystem access Codex has.
               </p>
             </div>
             {codexConfig && Array.isArray((codexConfig as Record<string, unknown>).layers) && (
               <div className="settings-section">
                 <h3>Config Layers</h3>
-                <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
+                <p className="settings-section-desc">
                   Configuration is merged from these sources (highest priority first):
                 </p>
                 {((codexConfig as Record<string, unknown>).layers as Array<Record<string, unknown>>).map((layer, i) => {
@@ -675,7 +687,7 @@ export function SettingsView({
             {codexConfig && typeof (codexConfig as Record<string, unknown>).origins === 'object' && (codexConfig as Record<string, unknown>).origins != null && (
               <div className="settings-section">
                 <h3>Config Origins</h3>
-                <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 8px' }}>
+                <p className="settings-section-desc">
                   Shows which layer each config key originates from.
                 </p>
                 {Object.entries((codexConfig as Record<string, unknown>).origins as Record<string, unknown>)
@@ -688,7 +700,7 @@ export function SettingsView({
                     return (
                       <div key={key} className="settings-row">
                         <label style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{key}</label>
-                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'capitalize' }}>{originType}</span>
+                        <span className="settings-value--capitalize" style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{originType}</span>
                       </div>
                     );
                   })}
@@ -712,12 +724,12 @@ export function SettingsView({
             <div className="settings-section">
               <h3>{t('settings.profileName')}</h3>
               {editingProfileName ? (
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div className="settings-inline-actions">
                   <input
                     value={profileNameValue}
                     onChange={e => setProfileNameValue(e.target.value)}
                     placeholder={t('settings.profileNamePlaceholder')}
-                    style={{ fontFamily: 'var(--font-sans)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 4, padding: '5px 10px', width: 200 }}
+                    className="settings-editable-input"
                   />
                   <button className="btn-small btn-primary" disabled={savingProfileName} onClick={async () => {
                     if (!onWriteConfig) return;
@@ -728,7 +740,7 @@ export function SettingsView({
                   <button className="btn-small" onClick={() => setEditingProfileName(false)}>{t('common.cancel')}</button>
                 </div>
               ) : (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div className="settings-inline-row">
                   <span className="settings-value">
                     {String(getConfigValue(codexConfig, 'profileName') ?? t('settings.notSet'))}
                   </span>
@@ -744,16 +756,16 @@ export function SettingsView({
             </div>
             <div className="settings-section">
               <h3>{t('settings.responseLang')}</h3>
-              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8 }}>
+              <p className="settings-hint">
                 {t('settings.responseLangDesc')}
               </p>
               {editingResponseLang ? (
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div className="settings-inline-actions">
                   <input
                     value={responseLangValue}
                     onChange={e => setResponseLangValue(e.target.value)}
                     placeholder={t('settings.responseLangPlaceholder')}
-                    style={{ fontFamily: 'var(--font-sans)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 4, padding: '5px 10px', width: 200 }}
+                    className="settings-editable-input"
                   />
                   <button className="btn-small btn-primary" disabled={savingResponseLang} onClick={async () => {
                     if (!onWriteConfig) return;
@@ -764,7 +776,7 @@ export function SettingsView({
                   <button className="btn-small" onClick={() => setEditingResponseLang(false)}>{t('common.cancel')}</button>
                 </div>
               ) : (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div className="settings-inline-row">
                   <span className="settings-value">
                     {String(getConfigValue(codexConfig, 'responseLanguage') ?? t('settings.notSet'))}
                   </span>
@@ -781,12 +793,12 @@ export function SettingsView({
             <div className="settings-section">
               <h3>{t('settings.customInstructions')}</h3>
               {editingInstructions ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className="settings-stack">
                   <textarea
                     value={instructionsValue}
                     onChange={e => setInstructionsValue(e.target.value)}
                     rows={10}
-                    style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 10px', resize: 'vertical', boxSizing: 'border-box' }}
+                    className="settings-editable-textarea"
                     placeholder={t('settings.customInstructionsPlaceholder')}
                   />
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -802,7 +814,7 @@ export function SettingsView({
               ) : (() => {
                 const instructions = getConfigValue(codexConfig, 'instructions') ?? getConfigValue(codexConfig, 'customInstructions');
                 return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="settings-stack">
                     {instructions ? (
                       <pre className="settings-text-block" style={{ fontFamily: 'var(--font-mono)', fontSize: 12, maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                         {typeof instructions === 'string' ? instructions : JSON.stringify(instructions, null, 2)}
@@ -838,7 +850,7 @@ export function SettingsView({
               <div className="settings-row">
                 <label>{t('settings.branchPrefixLabel')}</label>
                 {editingBranchPrefix ? (
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <div className="settings-inline-actions">
                     <input
                       value={branchPrefixValue}
                       onChange={e => setBranchPrefixValue(e.target.value)}
@@ -853,7 +865,7 @@ export function SettingsView({
                     <button className="btn-small" onClick={() => setEditingBranchPrefix(false)}>{t('common.cancel')}</button>
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <div className="settings-inline-row">
                     <span className="settings-value" style={{ fontFamily: 'var(--font-mono)' }}>
                       {String(getConfigValue(codexConfig, 'git.branchPrefix') ?? getConfigValue(codexConfig, 'branchPrefix') ?? 'codex/')}
                     </span>
@@ -894,12 +906,12 @@ export function SettingsView({
             <div className="settings-section">
               <h3>{t('settings.commitInstructions')}</h3>
               {editingCommitInstructions ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className="settings-stack">
                   <textarea
                     value={commitInstructionsValue}
                     onChange={e => setCommitInstructionsValue(e.target.value)}
                     rows={6}
-                    style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 10px', resize: 'vertical', boxSizing: 'border-box' }}
+                    className="settings-editable-textarea"
                     placeholder={t('settings.commitInstructionsPlaceholder')}
                   />
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -915,7 +927,7 @@ export function SettingsView({
               ) : (() => {
                 const commitInstructions = getConfigValue(codexConfig, 'git.commitInstructions') ?? getConfigValue(codexConfig, 'commitInstructions');
                 return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="settings-stack">
                     {commitInstructions ? (
                       <pre className="settings-text-block" style={{ fontFamily: 'var(--font-mono)', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                         {String(commitInstructions)}
@@ -975,7 +987,9 @@ export function SettingsView({
             )}
           </div>
         )}
+          </div>
+        </div>
       </div>
-    </div>
+    </DesktopPageShell>
   );
 }
