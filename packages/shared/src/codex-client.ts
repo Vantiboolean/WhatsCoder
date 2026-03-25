@@ -145,6 +145,7 @@ export class CodexClient {
 
     const epoch = ++this._connectionEpoch;
     this.setState('connecting');
+    console.log(`[CodexClient] connect() url=${url} epoch=${epoch} autoReconnect=${this._autoReconnect}`);
 
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -155,8 +156,11 @@ export class CodexClient {
       };
 
       try {
+        console.log(`[CodexClient] Creating WebSocket to ${url}...`);
         this.ws = new WebSocket(url);
+        console.log(`[CodexClient] WebSocket created, readyState=${this.ws.readyState}`);
       } catch (e) {
+        console.error(`[CodexClient] WebSocket constructor threw:`, e);
         this._lastError = String(e);
         this.setState('error');
         settle(reject, e);
@@ -164,6 +168,7 @@ export class CodexClient {
       }
 
       const timeout = setTimeout(() => {
+        console.error(`[CodexClient] Connection timed out after 10s, readyState=${this.ws?.readyState}`);
         this._lastError = 'Connection timed out';
         this.setState('error');
         this.ws?.close();
@@ -171,14 +176,18 @@ export class CodexClient {
       }, 10_000);
 
       this.ws.onopen = async () => {
+        console.log(`[CodexClient] WebSocket onopen fired, epoch=${epoch}`);
         clearTimeout(timeout);
         if (epoch !== this._connectionEpoch) return;
         try {
+          console.log(`[CodexClient] Sending initialize...`);
           await this.initialize();
+          console.log(`[CodexClient] Initialize succeeded, setting state to connected`);
           this._reconnectAttempt = 0;
           this.setState('connected');
           settle(resolve);
         } catch (e) {
+          console.error(`[CodexClient] Initialize failed:`, e);
           this._lastError = e instanceof Error ? e.message : String(e);
           this.setState('error');
           settle(reject, e);
@@ -229,7 +238,8 @@ export class CodexClient {
         }
       };
 
-      this.ws.onerror = () => {
+      this.ws.onerror = (event) => {
+        console.error(`[CodexClient] WebSocket onerror fired, readyState=${this.ws?.readyState}`, event);
         clearTimeout(timeout);
         if (epoch !== this._connectionEpoch) return;
         this._lastError = 'WebSocket connection failed';
@@ -238,6 +248,7 @@ export class CodexClient {
       };
 
       this.ws.onclose = (ev) => {
+        console.log(`[CodexClient] WebSocket onclose fired, code=${ev.code} reason="${ev.reason}" wasClean=${ev.wasClean}`);
         clearTimeout(timeout);
         if (epoch !== this._connectionEpoch) return;
 
