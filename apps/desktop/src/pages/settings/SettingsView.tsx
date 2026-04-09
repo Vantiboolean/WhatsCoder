@@ -192,6 +192,14 @@ export function SettingsView({
     }
   }, [tab, connState, client]);
 
+  useEffect(() => {
+    if (tab !== 'mcp' || connState !== 'connected' || !onRefreshMcp) {
+      return;
+    }
+
+    void onRefreshMcp();
+  }, [connState, onRefreshMcp, tab]);
+
   return (
     <DesktopPageShell
       className="settings-page"

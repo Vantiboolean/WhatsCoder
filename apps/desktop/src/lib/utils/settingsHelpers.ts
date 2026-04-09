@@ -75,7 +75,7 @@ export const SETTINGS_TAB_KEYS: { id: SettingsTab; key: string }[] = [
 ];
 
 export const THEME_PRESETS: ThemePreset[] = [
-  { id: 'codex', label: 'Codex', dark: { accent: '#0169cc', surface: '#111111', ink: '#fcfcfc' }, light: { accent: '#0169cc', surface: '#ffffff', ink: '#1a1a1b' }, previewColor: '#0169cc' },
+  { id: 'codex', label: 'Codex', dark: { accent: '#3794ff', surface: '#111315', ink: '#eceff4' }, light: { accent: '#0a6fd6', surface: '#f8fafc', ink: '#1d232b' }, previewColor: '#3794ff' },
   { id: 'linear', label: 'Linear', dark: { accent: '#5e6ad2', surface: '#17181d', ink: '#e6e9ef' }, light: { accent: '#5e6ad2', surface: '#ffffff', ink: '#1a1a1b' }, previewColor: '#5e6ad2' },
   { id: 'absolutely', label: 'Absolutely', dark: { accent: '#cc7d5e', surface: '#2d2d2b', ink: '#f9f9f7' }, light: { accent: '#cc7d5e', surface: '#f9f9f7', ink: '#2d2d2b' }, previewColor: '#cc7d5e' },
   { id: 'ayu', label: 'Ayu', dark: { accent: '#e6b450', surface: '#0b0e14', ink: '#bfbdb6' }, light: { accent: '#e6b450', surface: '#fafafa', ink: '#575f66' }, previewColor: '#e6b450' },
@@ -222,8 +222,8 @@ export function getDefaultThemeConfig(variant: 'dark' | 'light'): ChromeThemeCon
     fonts: { ui: null, code: null },
     opaqueWindows: true,
     semanticColors: variant === 'dark'
-      ? { diffAdded: '#40c977', diffRemoved: '#fa423e', skill: '#ad7bf9' }
-      : { diffAdded: '#00a240', diffRemoved: '#ba2623', skill: '#924ff7' },
+      ? { diffAdded: '#4ec9b0', diffRemoved: '#e06c75', skill: '#b495ff' }
+      : { diffAdded: '#158f77', diffRemoved: '#c54f58', skill: '#8d68e6' },
   };
 }
 
@@ -268,14 +268,33 @@ export function applyThemeConfig(config: ChromeThemeConfig, variant: 'dark' | 'l
   const root = document.documentElement;
   const { accent, surface, ink, contrast } = config;
   const c = contrast / 100;
+  const bgSecondary = mixHex(surface, ink, 0.03 + c * 0.015);
+  const bgTertiary = mixHex(surface, ink, 0.055 + c * 0.02);
+  const bgElevated = mixHex(surface, ink, 0.085 + c * 0.03);
+  const bgHover = mixHex(surface, ink, 0.11 + c * 0.035);
+  const bgInput = mixHex(surface, ink, variant === 'dark' ? 0.03 + c * 0.015 : 0.018 + c * 0.015);
+  const borderPrimary = mixHex(surface, ink, 0.11 + c * 0.03);
+  const borderSecondary = mixHex(surface, ink, 0.16 + c * 0.035);
+  const borderSubtle = mixHex(surface, ink, 0.075 + c * 0.02);
+  const sidebarBg = mixHex(surface, ink, variant === 'dark' ? 0.045 + c * 0.018 : 0.018 + c * 0.018);
+  const sidebarIcon = mixHex(ink, surface, 0.42 - c * 0.05);
+  const sidebarIconHover = mixHex(ink, surface, 0.18 - c * 0.03);
+  const sidebarItemActiveBg = mixHex(surface, ink, 0.085 + c * 0.025);
+  const sidebarItemHoverBg = mixHex(surface, ink, 0.065 + c * 0.02);
+  const panelHeaderBg = mixHex(surface, ink, variant === 'dark' ? 0.04 + c * 0.014 : 0.012 + c * 0.012);
+  const panelCardBg = mixHex(surface, ink, variant === 'dark' ? 0.05 + c * 0.018 : 0.006 + c * 0.01);
+  const overlayBase = variant === 'dark' ? '#090b0e' : '#101828';
 
   root.style.setProperty('--bg-primary', surface);
-  root.style.setProperty('--bg-secondary', mixHex(surface, ink, 0.03 + c * 0.02));
-  root.style.setProperty('--bg-tertiary', mixHex(surface, ink, 0.06 + c * 0.03));
-  root.style.setProperty('--bg-elevated', mixHex(surface, ink, 0.09 + c * 0.04));
-  root.style.setProperty('--bg-hover', mixHex(surface, ink, 0.10 + c * 0.05));
-  root.style.setProperty('--bg-input', mixHex(surface, ink, 0.04 + c * 0.02));
-  root.style.setProperty('--surface-secondary', mixHex(surface, ink, 0.03 + c * 0.02));
+  root.style.setProperty('--bg-secondary', bgSecondary);
+  root.style.setProperty('--bg-tertiary', bgTertiary);
+  root.style.setProperty('--bg-elevated', bgElevated);
+  root.style.setProperty('--bg-hover', bgHover);
+  root.style.setProperty('--bg-input', bgInput);
+  root.style.setProperty('--surface-secondary', bgSecondary);
+  root.style.setProperty('--surface-tertiary', bgTertiary);
+  root.style.setProperty('--surface-elevated', bgElevated);
+  root.style.setProperty('--surface-overlay', hexAlpha(overlayBase, variant === 'dark' ? 0.56 : 0.28));
 
   root.style.setProperty('--text-primary', ink);
   root.style.setProperty('--text-secondary', mixHex(ink, surface, 0.35 - c * 0.1));
@@ -300,14 +319,25 @@ export function applyThemeConfig(config: ChromeThemeConfig, variant: 'dark' | 'l
   root.style.setProperty('--accent-blue-faint', hexAlpha(accent, 0.08));
   root.style.setProperty('--accent-blue-strong', hexAlpha(accent, 0.4));
 
-  const borderAlpha = 0.06 + c * 0.04;
-  root.style.setProperty('--border-primary', mixHex(surface, ink, borderAlpha));
-  root.style.setProperty('--border-secondary', mixHex(surface, ink, borderAlpha * 1.5));
-  root.style.setProperty('--border-subtle', mixHex(surface, ink, borderAlpha * 0.6));
+  root.style.setProperty('--border-primary', borderPrimary);
+  root.style.setProperty('--border-secondary', borderSecondary);
+  root.style.setProperty('--border-subtle', borderSubtle);
+  root.style.setProperty('--border-default', borderPrimary);
 
   root.style.setProperty('--status-active', accent);
   root.style.setProperty('--status-info', accent);
   root.style.setProperty('--border-active', accent);
+  root.style.setProperty('--sidebar-bg', sidebarBg);
+  root.style.setProperty('--sidebar-border', borderPrimary);
+  root.style.setProperty('--sidebar-icon', sidebarIcon);
+  root.style.setProperty('--sidebar-icon-hover', sidebarIconHover);
+  root.style.setProperty('--sidebar-item-active-bg', sidebarItemActiveBg);
+  root.style.setProperty('--sidebar-item-hover-bg', sidebarItemHoverBg);
+  root.style.setProperty('--sidebar-section-border', borderSubtle);
+  root.style.setProperty('--sidebar-accent', accent);
+  root.style.setProperty('--sidebar-accent-muted', hexAlpha(accent, 0.16));
+  root.style.setProperty('--panel-header-bg', panelHeaderBg);
+  root.style.setProperty('--panel-card-bg', panelCardBg);
 
   root.style.setProperty('--diff-added', config.semanticColors.diffAdded);
   root.style.setProperty('--diff-removed', config.semanticColors.diffRemoved);
@@ -327,8 +357,8 @@ export function applyThemeConfig(config: ChromeThemeConfig, variant: 'dark' | 'l
     root.style.removeProperty('--font-mono');
   }
 
-  root.style.setProperty('--shadow-focus', `0 0 0 3px ${hexAlpha(accent, 0.15)}`);
-  root.style.setProperty('--shadow-focus-blue', `0 0 0 2px ${hexAlpha(accent, 0.25)}`);
+  root.style.setProperty('--shadow-focus', `0 0 0 1px ${hexAlpha(accent, 0.34)}`);
+  root.style.setProperty('--shadow-focus-blue', `0 0 0 1px ${hexAlpha(accent, 0.28)}`);
 }
 
 export function applyFontSizes(uiSize: number, codeSize: number) {

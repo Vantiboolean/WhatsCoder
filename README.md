@@ -51,6 +51,10 @@ pnpm dev:desktop
 
 This starts the Tauri + Vite development server.
 
+If Rust is already installed but your current terminal session does not include
+`cargo` in `PATH`, the desktop scripts will automatically try the default Cargo
+install location such as `~/.cargo/bin`.
+
 ## Build
 
 ### Build all packages

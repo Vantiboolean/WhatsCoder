@@ -1,57 +1,53 @@
 /**
- * Design tokens matching the Codex desktop app's visual language.
+ * Design tokens matching Cursor's visual language.
  * Platform-agnostic values — each app applies these to its own styling system.
  */
 
 export const colors = {
   bg: {
-    primary: '#0d0d0e',
-    secondary: '#161617',
-    tertiary: '#1e1e1f',
-    elevated: '#252527',
-    hover: '#2a2a2c',
-    input: '#1a1a1c',
+    primary: '#1b1913',
+    secondary: '#14120b',
+    tertiary: '#1d1b15',
+    elevated: '#26241e',
+    hover: 'rgba(237, 236, 236, 0.07)',
+    input: '#201e18',
   },
   text: {
-    primary: '#e5e5e5',
-    secondary: '#a0a0a0',
-    tertiary: '#6e6e6e',
-    inverse: '#0d0d0e',
-    link: '#339cff',
+    primary: 'rgba(237, 236, 236, 0.93)',
+    secondary: 'rgba(237, 236, 236, 0.55)',
+    tertiary: 'rgba(237, 236, 236, 0.37)',
+    inverse: '#14120b',
+    link: '#599CE7',
   },
   accent: {
-    // Codex blue — dark mode
-    primary: '#339cff',
-    primaryHover: '#1a8aff',
-    primaryMuted: 'rgba(51, 156, 255, 0.15)',
-    primaryBorder: 'rgba(51, 156, 255, 0.3)',
-    // Codex blue — light mode
-    primaryLight: '#0285ff',
-    primaryLightHover: '#006ee0',
-    // Semantic green for ok/diff states
-    emerald: '#40c977',
-    emeraldLight: '#00a240',
-    // Skill purple
-    skill: '#ad7bf9',
-    skillLight: '#924ff7',
+    primary: '#599CE7',
+    primaryHover: '#4A8DD4',
+    primaryMuted: 'rgba(89, 156, 231, 0.16)',
+    primaryBorder: 'rgba(89, 156, 231, 0.35)',
+    primaryLight: '#3C7CAB',
+    primaryLightHover: '#206595',
+    emerald: '#4ec9b0',
+    emeraldLight: '#158f77',
+    skill: '#b495ff',
+    skillLight: '#8d68e6',
   },
   border: {
-    primary: '#2a2a2c',
-    secondary: '#3a3a3c',
-    subtle: '#1f1f21',
+    primary: 'rgba(228, 228, 228, 0.15)',
+    secondary: 'rgba(228, 228, 228, 0.22)',
+    subtle: 'rgba(228, 228, 228, 0.09)',
   },
   status: {
-    active: '#339cff',
-    idle: '#6e6e6e',
-    error: '#ef4444',
-    warning: '#f59e0b',
-    info: '#339cff',
+    active: '#599CE7',
+    idle: '#6d7682',
+    error: '#e06c75',
+    warning: '#d7ba7d',
+    info: '#599CE7',
   },
   item: {
-    userMessage: '#1a2332',
+    userMessage: '#1e1e1e',
     agentMessage: 'transparent',
-    commandBg: '#131318',
-    fileDiffBg: '#111116',
+    commandBg: '#141414',
+    fileDiffBg: '#1a1a1a',
   },
 } as const;
 
@@ -66,26 +62,26 @@ export const spacing = {
 } as const;
 
 export const radius = {
-  sm: 6,
-  md: 10,
-  lg: 14,
-  xl: 20,
+  sm: 2,
+  md: 4,
+  lg: 6,
+  xl: 8,
   full: 999,
 } as const;
 
 export const typography = {
   fontFamily: {
-    sans: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
-    mono: '"SF Mono", "Fira Code", "Cascadia Code", Menlo, monospace',
+    sans: '-apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    mono: 'Consolas, "JetBrains Mono", "Courier New", monospace',
   },
   size: {
-    xs: 11,
-    sm: 13,
-    md: 15,
-    lg: 17,
-    xl: 20,
-    xxl: 24,
-    title: 28,
+    xs: 10,
+    sm: 12,
+    md: 13,
+    lg: 14,
+    xl: 16,
+    xxl: 22,
+    title: 24,
   },
   weight: {
     regular: '400' as const,
