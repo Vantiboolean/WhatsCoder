@@ -8,9 +8,11 @@ mod claude_api;
 mod database;
 mod dynamic_tools;
 
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -25,6 +27,65 @@ static CODEX_BINARY_PATH: Mutex<Option<String>> = Mutex::new(None);
 pub struct CodexServerStatus {
     pub running: bool,
     pub pid: Option<u32>,
+}
+
+fn build_codex_app_server_args(listen_url: &str, include_session_source: bool) -> Vec<String> {
+    let mut args = vec![
+        "app-server".to_string(),
+        "--listen".to_string(),
+        listen_url.to_string(),
+    ];
+
+    if include_session_source {
+        args.push("--session-source".to_string());
+        args.push("desktop".to_string());
+    }
+
+    args
+}
+
+fn app_server_supports_session_source(binary: &str) -> bool {
+    let output = if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/C", binary, "app-server", "--help"])
+            .output()
+    } else {
+        Command::new(binary).args(["app-server", "--help"]).output()
+    };
+
+    match output {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let supported =
+                stdout.contains("--session-source") || stderr.contains("--session-source");
+
+            eprintln!(
+                "[codex-server] app-server --help probe: status={}, session-source-supported={supported}",
+                output.status
+            );
+
+            supported
+        }
+        Err(e) => {
+            eprintln!(
+                "[codex-server] Failed to probe app-server --help for session-source support: {e}"
+            );
+            false
+        }
+    }
+}
+
+fn spawn_codex_app_server(binary: &str, args: &[String]) -> std::io::Result<Child> {
+    if cfg!(target_os = "windows") {
+        let mut command = Command::new("cmd");
+        command.arg("/C").arg(binary).args(args);
+        command.env("CODEX_DESKTOP", "1").spawn()
+    } else {
+        let mut command = Command::new(binary);
+        command.args(args);
+        command.env("CODEX_DESKTOP", "1").spawn()
+    }
 }
 
 /// Spawns `codex app-server` if none is running; reuses an existing healthy child and remembers the binary path for later starts.
@@ -72,29 +133,30 @@ fn start_codex_server(
         eprintln!("[codex-server] Using cmd /C wrapper for Windows");
     }
 
-    let child = if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args([
-                "/C", &binary, "app-server",
-                "--listen", &listen_url,
-                "--session-source", "desktop",
-            ])
-            .env("CODEX_DESKTOP", "1")
-            .spawn()
-    } else {
-        Command::new(&binary)
-            .args([
-                "app-server",
-                "--listen", &listen_url,
-                "--session-source", "desktop",
-            ])
-            .env("CODEX_DESKTOP", "1")
-            .spawn()
+    let include_session_source = app_server_supports_session_source(&binary);
+    if !include_session_source {
+        eprintln!("[codex-server] Current codex CLI does not support --session-source; starting without it");
     }
-    .map_err(|e| {
+    let app_server_args = build_codex_app_server_args(&listen_url, include_session_source);
+
+    let mut child = spawn_codex_app_server(&binary, &app_server_args).map_err(|e| {
         eprintln!("[codex-server] SPAWN FAILED: {e}");
         format!("Failed to start codex app-server: {e}")
     })?;
+
+    std::thread::sleep(Duration::from_millis(300));
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            eprintln!("[codex-server] Process exited immediately after spawn: {status}");
+            return Err(format!(
+                "codex app-server exited immediately with status {status}. Check the desktop logs for CLI details."
+            ));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("[codex-server] Failed to probe freshly spawned process: {e}");
+        }
+    }
 
     if let Ok(mut path_guard) = CODEX_BINARY_PATH.lock() {
         *path_guard = Some(binary.clone());
@@ -154,11 +216,64 @@ fn get_codex_server_status() -> Result<CodexServerStatus, String> {
     })
 }
 
+#[tauri::command]
+fn probe_tcp_port(host: String, port: u16) -> Result<bool, String> {
+    let address = format!("{host}:{port}");
+    let timeout = Duration::from_millis(250);
+
+    let addrs = address
+        .to_socket_addrs()
+        .map_err(|e| format!("Failed to resolve {address}: {e}"))?;
+
+    for addr in addrs {
+        if TcpStream::connect_timeout(&addr, timeout).is_ok() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 fn codex_exe_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "codex.exe"
     } else {
         "codex"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_codex_app_server_args;
+
+    #[test]
+    fn build_codex_app_server_args_skips_session_source_when_unsupported() {
+        let args = build_codex_app_server_args("ws://127.0.0.1:4500", false);
+
+        assert_eq!(
+            args,
+            vec![
+                "app-server".to_string(),
+                "--listen".to_string(),
+                "ws://127.0.0.1:4500".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_codex_app_server_args_includes_session_source_when_supported() {
+        let args = build_codex_app_server_args("ws://127.0.0.1:4500", true);
+
+        assert_eq!(
+            args,
+            vec![
+                "app-server".to_string(),
+                "--listen".to_string(),
+                "ws://127.0.0.1:4500".to_string(),
+                "--session-source".to_string(),
+                "desktop".to_string(),
+            ]
+        );
     }
 }
 
@@ -436,8 +551,8 @@ fn read_active_workspace_roots() -> Result<Vec<String>, String> {
 
     let content = std::fs::read_to_string(&state_path)
         .map_err(|e| format!("Failed to read global state: {e}"))?;
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse global state: {e}"))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse global state: {e}"))?;
 
     let Some(items) = json
         .get("active-workspace-roots")
@@ -608,6 +723,17 @@ pub struct PromptItem {
 pub struct PromptsList {
     pub workspace: Vec<PromptItem>,
     pub general: Vec<PromptItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitWorktreeEntry {
+    pub path: String,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub is_bare: bool,
+    pub is_detached: bool,
+    pub is_locked: bool,
 }
 
 fn parse_status_code(code: &str) -> &str {
@@ -956,7 +1082,125 @@ fn list_prompts(cwd: Option<String>) -> Result<PromptsList, String> {
 
 #[tauri::command]
 fn read_prompt(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path)        .map_err(|e| format!("Failed to read prompt: {e}"))
+    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read prompt: {e}"))
+}
+
+#[tauri::command]
+fn list_git_worktrees(cwd: String) -> Result<Vec<GitWorktreeEntry>, String> {
+    let output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(&cwd)
+        .output()
+        .map_err(|e| format!("Failed to list git worktrees: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "git worktree list failed".to_string()
+        } else {
+            stderr
+        });
+    }
+
+    let stdout =
+        String::from_utf8(output.stdout).map_err(|e| format!("Invalid git worktree output: {e}"))?;
+    let mut entries = Vec::new();
+    let mut current: Option<GitWorktreeEntry> = None;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if let Some(entry) = current.take() {
+                entries.push(entry);
+            }
+            continue;
+        }
+
+        if let Some(path) = trimmed.strip_prefix("worktree ") {
+            if let Some(entry) = current.take() {
+                entries.push(entry);
+            }
+            current = Some(GitWorktreeEntry {
+                path: path.to_string(),
+                branch: None,
+                head: None,
+                is_bare: false,
+                is_detached: false,
+                is_locked: false,
+            });
+            continue;
+        }
+
+        if let Some(entry) = current.as_mut() {
+            if let Some(head) = trimmed.strip_prefix("HEAD ") {
+                entry.head = Some(head.to_string());
+            } else if let Some(branch) = trimmed.strip_prefix("branch refs/heads/") {
+                entry.branch = Some(branch.to_string());
+            } else if trimmed == "bare" {
+                entry.is_bare = true;
+            } else if trimmed == "detached" {
+                entry.is_detached = true;
+            } else if trimmed.starts_with("locked") {
+                entry.is_locked = true;
+            }
+        }
+    }
+
+    if let Some(entry) = current.take() {
+        entries.push(entry);
+    }
+
+    Ok(entries)
+}
+
+#[tauri::command]
+fn create_git_worktree(cwd: String, branch: String, path: String) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["worktree", "add", "-b", &branch, &path])
+        .current_dir(&cwd)
+        .output()
+        .map_err(|e| format!("Failed to create git worktree: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "git worktree add failed".to_string()
+        } else {
+            stderr
+        });
+    }
+
+    Ok(path)
+}
+
+#[tauri::command]
+fn remove_git_worktree(path: String, force: Option<bool>) -> Result<(), String> {
+    let mut args = vec!["worktree", "remove"];
+    if force.unwrap_or(false) {
+        args.push("--force");
+    }
+    args.push(&path);
+
+    let current_dir = PathBuf::from(&path)
+        .parent()
+        .map(|value| value.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let output = Command::new("git")
+        .args(&args)
+        .current_dir(current_dir)
+        .output()
+        .map_err(|e| format!("Failed to remove git worktree: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "git worktree remove failed".to_string()
+        } else {
+            stderr
+        });
+    }
+
+    Ok(())
 }
 
 // ── Native folder picker & OS file manager ──────────────────────────────────
@@ -1121,7 +1365,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Initialize the Rust-managed SQLite database
-            let app_dir = app.path().app_data_dir().expect("failed to resolve app data dir");
+            let app_dir = app
+                .path()
+                .app_data_dir()
+                .expect("failed to resolve app data dir");
             std::fs::create_dir_all(&app_dir).ok();
             let db_path = app_dir.join("codex.db");
             database::init(&db_path).expect("failed to initialize database");
@@ -1147,6 +1394,9 @@ pub fn run() {
             dynamic_tools::tool_search_in_files,
             list_prompts,
             read_prompt,
+            list_git_worktrees,
+            create_git_worktree,
+            remove_git_worktree,
             pick_folder,
             read_codex_config,
             read_active_workspace_roots,
@@ -1157,6 +1407,7 @@ pub fn run() {
             start_codex_server,
             stop_codex_server,
             get_codex_server_status,
+            probe_tcp_port,
             find_codex_candidates,
             pick_codex_binary,
             read_claude_settings,

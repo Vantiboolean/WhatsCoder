@@ -122,7 +122,10 @@ fn claude_debug_log_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .ok()
         .or_else(dirs_next::data_dir)?;
-    Some(base.join("com.whats-coder.desktop").join("claude-debug.log"))
+    Some(
+        base.join("com.whats-coder.desktop")
+            .join("claude-debug.log"),
+    )
 }
 
 fn write_claude_debug_log(stage: &str, detail: impl AsRef<str>) {
@@ -226,7 +229,10 @@ async fn stream_claude_response(app: AppHandle, config: ClaudeSendConfig) -> Res
         Err(error) if error.can_retry_without_resume => {
             write_claude_debug_log(
                 "stream_claude_response:retry_without_resume",
-                format!("desktop_session_id={} message={}", config.session_id, error.message),
+                format!(
+                    "desktop_session_id={} message={}",
+                    config.session_id, error.message
+                ),
             );
             run_claude_stream(app.clone(), &config, false)
                 .await
@@ -235,7 +241,10 @@ async fn stream_claude_response(app: AppHandle, config: ClaudeSendConfig) -> Res
         Err(error) => {
             write_claude_debug_log(
                 "stream_claude_response:error",
-                format!("desktop_session_id={} message={}", config.session_id, error.message),
+                format!(
+                    "desktop_session_id={} message={}",
+                    config.session_id, error.message
+                ),
             );
             return Err(error.message);
         }
@@ -469,7 +478,8 @@ async fn run_claude_stream(
         let Some(line) = next_line.map_err(|e| ClaudeRunError {
             message: format!("Failed reading Claude Code output: {e}"),
             can_retry_without_resume: false,
-        })? else {
+        })?
+        else {
             break;
         };
 
@@ -564,7 +574,10 @@ async fn run_claude_stream(
         }
         write_claude_debug_log(
             "run_claude_stream:status_error",
-            format!("desktop_session_id={} message={}", config.session_id, message),
+            format!(
+                "desktop_session_id={} message={}",
+                config.session_id, message
+            ),
         );
         return Err(ClaudeRunError {
             message,
