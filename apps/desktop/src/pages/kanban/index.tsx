@@ -23,12 +23,12 @@ import {
 } from '../../lib/db/kanbanDb';
 import type { ThreadDetail } from '@whats-coder/shared';
 import {
-  buildIssueDraftKey,
-  createEmptyWorkspaceDraft,
-  getWorkspaceDraftSummary,
-  loadWorkspaceDraftMap,
-  type WorkspaceDraftSummary,
-} from '../../lib/utils/workspaceDrafts';
+  listWorkspaceSummaries,
+} from '../../lib/workspace/workspaceDb';
+import {
+  buildIssueScopeId,
+  type WorkspaceSummary,
+} from '../../lib/workspace/types';
 import { DesktopEmptyState, DesktopPageShell } from '../layout/DesktopPageShell';
 import type { WorkspaceDraftPrefill, WorkspaceSectionId } from '../workspace/WorkspacePanel';
 import { ThreadView } from '../chat/ThreadView';
@@ -51,7 +51,20 @@ const KANBAN_STATUS_COLORS: Record<KanbanStatus, string> = {
   in_review: 'var(--accent-purple, #a855f7)',
   done: 'var(--accent-green)',
 };
-const EMPTY_WORKSPACE_SUMMARY = getWorkspaceDraftSummary(createEmptyWorkspaceDraft());
+const EMPTY_WORKSPACE_SUMMARY: WorkspaceSummary = {
+  hasActivity: false,
+  totalSteps: 0,
+  completedSteps: 0,
+  artifactCount: 0,
+  runtimeReady: false,
+  worktreeReady: false,
+  lastRunStatus: null,
+  lastRunSummary: null,
+  primaryExecutorName: null,
+  primaryExecutorModel: null,
+  primaryWorktreePath: null,
+  primaryWorktreeBranch: null,
+};
 
 export const KanbanPanel = memo(function KanbanPanel({
   projects,
@@ -104,6 +117,7 @@ export const KanbanPanel = memo(function KanbanPanel({
   const [threadLoading, setThreadLoading] = useState(false);
   const [executingIssueIds, setExecutingIssueIds] = useState<Set<string>>(new Set());
   const [deletingIssueId, setDeletingIssueId] = useState<string | null>(null);
+  const [workspaceSummaryByIssue, setWorkspaceSummaryByIssue] = useState<Record<string, WorkspaceSummary>>({});
   const threadViewSeqRef = useRef(0);
 
   const selectedProject = projectOptions.find((p) => p.id === selectedProjectId) ?? null;
@@ -115,24 +129,50 @@ export const KanbanPanel = memo(function KanbanPanel({
       for (const project of projects) {
         merged.set(project.id, project);
       }
+      if (activeProjectId && !merged.has(activeProjectId)) {
+        merged.set(activeProjectId, { id: activeProjectId, name: projectNameFromId(activeProjectId) });
+      }
+      if (selectedProjectId && !merged.has(selectedProjectId)) {
+        merged.set(selectedProjectId, { id: selectedProjectId, name: projectNameFromId(selectedProjectId) });
+      }
       for (const projectId of dbProjectIds) {
         if (!merged.has(projectId)) {
           merged.set(projectId, { id: projectId, name: projectNameFromId(projectId) });
         }
       }
-      setProjectOptions(Array.from(merged.values()));
+      const nextOptions = Array.from(merged.values());
+      setProjectOptions((prev) => {
+        const prevIds = prev.map((p) => p.id).join(',');
+        const nextIds = nextOptions.map((p) => p.id).join(',');
+        return prevIds === nextIds ? prev : nextOptions;
+      });
     } catch {
-      setProjectOptions(projects);
+      const fallbackOptions = [...projects];
+      if (activeProjectId && !fallbackOptions.some((project) => project.id === activeProjectId)) {
+        fallbackOptions.push({ id: activeProjectId, name: projectNameFromId(activeProjectId) });
+      }
+      if (selectedProjectId && !fallbackOptions.some((project) => project.id === selectedProjectId)) {
+        fallbackOptions.push({ id: selectedProjectId, name: projectNameFromId(selectedProjectId) });
+      }
+      setProjectOptions((prev) => {
+        const prevIds = prev.map((p) => p.id).join(',');
+        const nextIds = fallbackOptions.map((p) => p.id).join(',');
+        return prevIds === nextIds ? prev : fallbackOptions;
+      });
     }
-  }, [projects]);
+  }, [activeProjectId, projects, selectedProjectId]);
 
   useEffect(() => {
     void refreshProjectOptions();
   }, [refreshProjectOptions]);
 
+  const initialLoadDoneRef = useRef(false);
+
   useEffect(() => {
-    if (activeProjectId && activeProjectId !== selectedProjectId) {
-      setSelectedProjectId(activeProjectId);
+    if (activeProjectId) {
+      if (activeProjectId !== selectedProjectId) {
+        setSelectedProjectId(activeProjectId);
+      }
       return;
     }
 
@@ -166,9 +206,16 @@ export const KanbanPanel = memo(function KanbanPanel({
       setLoading(false);
       return;
     }
-    setLoading(true);
-    void refreshIssues(selectedProjectId).finally(() => setLoading(false));
-  }, [selectedProjectId, refreshIssues]);
+    if (!initialLoadDoneRef.current) {
+      setLoading(true);
+    }
+    void refreshIssues(selectedProjectId).finally(() => {
+      setLoading(false);
+      initialLoadDoneRef.current = true;
+    });
+    // Only trigger on selectedProjectId changes, not on refreshIssues reference changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProjectId || executionSyncVersion === undefined) return;
@@ -517,14 +564,33 @@ export const KanbanPanel = memo(function KanbanPanel({
     () => Number(Boolean(searchQuery)) + Number(priorityFilter !== 'all') + Number(Boolean(tagFilter)),
     [priorityFilter, searchQuery, tagFilter],
   );
-  const workspaceSummaryByIssue = useMemo<Record<string, WorkspaceDraftSummary>>(() => {
-    const draftMap = loadWorkspaceDraftMap();
-    return Object.fromEntries(
-      issues.map((issue) => {
-        const issueDraft = draftMap[buildIssueDraftKey(issue.id)];
-        return [issue.id, issueDraft ? getWorkspaceDraftSummary(issueDraft) : EMPTY_WORKSPACE_SUMMARY];
-      }),
-    );
+  useEffect(() => {
+    let cancelled = false;
+    if (issues.length === 0) {
+      setWorkspaceSummaryByIssue({});
+      return;
+    }
+
+    void listWorkspaceSummaries(issues.map((issue) => buildIssueScopeId(issue.id)))
+      .then((summaries) => {
+        if (cancelled) return;
+        setWorkspaceSummaryByIssue(
+          Object.fromEntries(
+            issues.map((issue) => [issue.id, summaries[buildIssueScopeId(issue.id)] ?? EMPTY_WORKSPACE_SUMMARY]),
+          ),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWorkspaceSummaryByIssue(
+            Object.fromEntries(issues.map((issue) => [issue.id, EMPTY_WORKSPACE_SUMMARY])),
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [issues]);
 
   useEffect(() => {

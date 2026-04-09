@@ -103,7 +103,7 @@ export function HistoryPanel({
         </div>
       )}
     >
-        <div className="providers-list">
+        <div className="providers-list history-list">
           {entries.length === 0 ? (
             <DesktopEmptyState
               icon={(

@@ -4,16 +4,22 @@ import {
   PRIORITY_CONFIG,
   type KanbanIssue,
 } from '../../lib/db/kanbanDb';
-import type { WorkspaceDraftSummary } from '../../lib/utils/workspaceDrafts';
+import type { WorkspaceSummary } from '../../lib/workspace/types';
 import { PRIORITY_I18N, EXECUTION_STATE_I18N, isDueOverdue, isDueSoon } from './kanban-helpers';
 
-const EMPTY_WORKSPACE_SUMMARY: WorkspaceDraftSummary = {
+const EMPTY_WORKSPACE_SUMMARY: WorkspaceSummary = {
   hasActivity: false,
   totalSteps: 0,
   completedSteps: 0,
   artifactCount: 0,
   runtimeReady: false,
   worktreeReady: false,
+  lastRunStatus: null,
+  lastRunSummary: null,
+  primaryExecutorName: null,
+  primaryExecutorModel: null,
+  primaryWorktreePath: null,
+  primaryWorktreeBranch: null,
 };
 
 export const IssueCard = memo(function IssueCard({
@@ -41,7 +47,7 @@ export const IssueCard = memo(function IssueCard({
   onViewThread?: (issue: KanbanIssue) => void;
   onOpenWorkspace?: (issue: KanbanIssue) => void;
   isExecuting?: boolean;
-  workspaceSummary?: WorkspaceDraftSummary | null;
+  workspaceSummary?: WorkspaceSummary | null;
 }) {
   const { t } = useTranslation();
   const [showMenu, setShowMenu] = useState(false);

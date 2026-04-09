@@ -43,7 +43,7 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { automationRowToScheduleConfig, computeNextRun, computeRetryDelaySeconds } from './lib/utils/automations';
 import { DESKTOP_DYNAMIC_TOOL_SPECS, executeDesktopDynamicToolCall } from './lib/api/dynamicTools';
-import { getClaudeClient, isClaudeModelId, normalizeClaudeModelId } from './lib/api/claudeClient';
+import { ClaudeClient, getClaudeClient, isClaudeModelId, normalizeClaudeModelId } from './lib/api/claudeClient';
 import { applyServerEventToThreadDetail, findThreadItem, mergeThreadDetailWithLocalState } from './state/threadState';
 import { CodeViewer, type OverlayView } from './pages/code/CodeViewer';
 import { ThreadSidebar } from './pages/chat/ThreadSidebar';
@@ -78,6 +78,7 @@ import {
   applyThemeConfig, applyFontSizes,
   resolveThemeVariant, getDefaultThemeConfig, hexAlpha, mixHex,
 } from './lib/utils/settingsHelpers';
+import type { WorkspaceExecBridge } from './lib/workspace/workspaceExecBridge';
 
 type ReasoningLevel = 'low' | 'medium' | 'high' | 'xhigh';
 type StartAutomationThreadOptions = { revealThread?: boolean; toast?: boolean };
@@ -87,6 +88,13 @@ type StartAutomationThreadResult =
   | { ok: false; error: string };
 type ExecuteAutomationResult = StartAutomationThreadResult & { runId?: string };
 type CarryoverMessage = { role: 'user' | 'assistant'; content: string };
+type WorkspaceClaudeRunState = {
+  status: 'running' | 'success' | 'failed';
+  prompt: string;
+  assistantText: string;
+  error: string | null;
+  startedAt: number;
+};
 
 const CROSS_PROVIDER_HISTORY_CHAR_LIMIT = 14_000;
 const CROSS_PROVIDER_RECENT_MESSAGE_COUNT = 8;
@@ -1325,6 +1333,8 @@ export function App() {
 
   // ── Claude support ──
   const claudeClientRef = useRef(getClaudeClient());
+  const workspaceClaudeClientsRef = useRef(new Map<string, ClaudeClient>());
+  const workspaceClaudeRunsRef = useRef(new Map<string, WorkspaceClaudeRunState>());
   const claudeModels = useMemo(() => claudeClientRef.current.listModels(), []);
   const isClaudeModel = useCallback((modelId?: string | null) => isClaudeModelId(modelId), []);
   const availableCodexModels = useMemo(
@@ -1691,11 +1701,6 @@ export function App() {
     [folderAlias, threadGroups],
   );
 
-  const workspaceProjects = useMemo(
-    () => automationProjects.map((project) => ({ id: project.cwd, name: project.label })),
-    [automationProjects],
-  );
-
   const kanbanProjects = useMemo<KanbanProject[]>(() => {
     const cwdMap = new Map<string, string>();
     for (const t of threads) {
@@ -1900,6 +1905,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (sidebarView !== 'threads') {
+      return;
+    }
+
     const projectCwds = threadGroups.filter((group) => group.cwd && group.folder).map((group) => group.cwd);
 
     if (threadDetail?.cwd) {
@@ -1919,7 +1928,7 @@ export function App() {
     if (!activeProjectCwd || !projectCwds.includes(activeProjectCwd)) {
       setActiveProjectCwd(projectCwds[0]);
     }
-  }, [activeProjectCwd, threadDetail?.cwd, threadGroups]);
+  }, [activeProjectCwd, sidebarView, threadDetail?.cwd, threadGroups]);
 
   useEffect(() => {
     const cwd = threadDetail?.cwd || (threadGroups.length > 0 ? threadGroups[0]?.cwd : null);
@@ -2686,9 +2695,6 @@ export function App() {
       try {
         account = await refreshAccountInfo();
       } catch { /* account optional */ }
-      try {
-        await refreshMcpServers();
-      } catch { /* mcp optional */ }
       const config = await refreshCodexConfig();
       const configuredModel = getStringConfigValue(config, 'model');
       const nextModel = pickPreferredCodexModel(
@@ -2709,6 +2715,28 @@ export function App() {
       return parseInt(u.port, 10) || 4500;
     } catch {
       return 4500;
+    }
+  }, []);
+
+  const resolveLoopbackServerEndpoint = useCallback((wsUrl: string): { host: string; port: number } | null => {
+    try {
+      const u = new URL(wsUrl);
+      const hostname = u.hostname.toLowerCase();
+      const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+      if (!isLoopback) {
+        return null;
+      }
+
+      if (u.pathname === '/ws' || u.pathname === '/ws/') {
+        return { host: '127.0.0.1', port: 4500 };
+      }
+
+      return {
+        host: '127.0.0.1',
+        port: parseInt(u.port, 10) || 4500,
+      };
+    } catch {
+      return null;
     }
   }, []);
 
@@ -2891,6 +2919,40 @@ export function App() {
     };
 
     (async () => {
+      const loopbackEndpoint = resolveLoopbackServerEndpoint(url);
+      if (loopbackEndpoint) {
+        try {
+          const portOpen = await invoke<boolean>('probe_tcp_port', loopbackEndpoint);
+          if (cancelled) return;
+
+          if (!portOpen) {
+            console.log('[startup] Local server port closed, skipping websocket probe and auto-starting...');
+            await autoStartServer();
+            return;
+          }
+
+          console.log('[startup] Local server port already open, connecting without proxy probe');
+          try {
+            await handleConnect(url);
+            if (cancelled) return;
+            try {
+              const status = await invoke<{ running: boolean; pid: number | null }>('get_codex_server_status');
+              if (!cancelled && status.running) {
+                serverManagedRef.current = true;
+                setServerRunning(true);
+                startHeartbeat();
+              }
+            } catch { /* ignore */ }
+            return;
+          } catch (loopbackConnectErr) {
+            console.log('[startup] Loopback direct connect failed, falling back to websocket probe:', loopbackConnectErr);
+            clientRef.current.disconnect();
+          }
+        } catch (probePortErr) {
+          console.error('[startup] Loopback port probe failed, falling back to websocket probe:', probePortErr);
+        }
+      }
+
       console.log('[startup] Probing server at', url);
       try {
         await clientRef.current.connect(url, { autoReconnect: false });
@@ -2911,9 +2973,6 @@ export function App() {
         try {
           account = await refreshAccountInfo();
         } catch { /* account optional */ }
-        try {
-          await refreshMcpServers();
-        } catch { /* mcp optional */ }
         const config = await refreshCodexConfig();
         const configuredModel = getStringConfigValue(config, 'model');
         const nextModel = pickPreferredCodexModel(
@@ -5124,6 +5183,232 @@ export function App() {
     setWorkspacePrefill(params.prefill ?? null);
     setSidebarView('workspace');
   }, [setWorkspaceSection]);
+  const handleWorkspacePrefillConsumed = useCallback((seedId: string) => {
+    setWorkspacePrefill((current) => (current?.seedId === seedId ? null : current));
+  }, []);
+  const workspaceWindowControls = useMemo(() => <WindowControls />, []);
+  const readWorkspaceThreadDetail = useCallback(async (threadId: string) => {
+    const provider = getThreadProvider(threadId);
+    if (provider === 'claude') {
+      const [detail, config] = await Promise.all([
+        claudeClientRef.current.getSession(threadId),
+        getChatConfig(threadId).catch(() => null),
+      ]);
+      if (!detail) {
+        throw new Error('Failed to load Claude thread');
+      }
+      const merged = applyThreadConfig(detail, config);
+      const runState = workspaceClaudeRunsRef.current.get(threadId);
+      if (!runState) {
+        cacheThreadDetail(merged);
+        return merged;
+      }
+
+      const turns = merged.turns ? [...merged.turns] : [];
+      if (turns.length === 0) {
+        turns.push({
+          id: `workspace-claude-turn-${threadId}`,
+          status: runState.status === 'running' ? 'inProgress' : runState.status === 'failed' ? 'failed' : 'completed',
+          items: [
+            {
+              type: 'userMessage',
+              id: `workspace-claude-user-${threadId}`,
+              content: [{ type: 'text', text: runState.prompt }],
+            },
+          ],
+          error: runState.status === 'failed' ? { message: runState.error ?? 'Claude run failed' } : null,
+        });
+      }
+
+      const lastTurn = turns[turns.length - 1];
+      const syntheticAssistantId = `workspace-claude-assistant-${threadId}`;
+      const filteredItems = lastTurn.items.filter((item) => item.id !== syntheticAssistantId);
+      if (runState.assistantText.trim() && (runState.status === 'running' || runState.status === 'failed')) {
+        filteredItems.push({
+          type: 'agentMessage',
+          id: syntheticAssistantId,
+          text: runState.assistantText,
+          phase: runState.status === 'running' ? 'commentary' : 'final_answer',
+        });
+      }
+      turns[turns.length - 1] = {
+        ...lastTurn,
+        status: runState.status === 'running' ? 'inProgress' : runState.status === 'failed' ? 'failed' : 'completed',
+        items: filteredItems,
+        error: runState.status === 'failed' ? { message: runState.error ?? 'Claude run failed' } : lastTurn.error,
+      };
+
+      const enriched = { ...merged, turns };
+      if (runState.status !== 'running') {
+        workspaceClaudeRunsRef.current.delete(threadId);
+        const activeClient = workspaceClaudeClientsRef.current.get(threadId);
+        if (activeClient) {
+          activeClient.dispose().catch(() => {});
+          workspaceClaudeClientsRef.current.delete(threadId);
+        }
+      }
+      cacheThreadDetail(enriched);
+      return enriched;
+    }
+
+    return readKanbanThreadDetail(threadId);
+  }, [cacheThreadDetail, getThreadProvider, readKanbanThreadDetail]);
+  const workspaceExecBridge = useMemo<WorkspaceExecBridge>(() => ({
+    runExecutor: async ({ executor, prompt, projectId, preferredThreadName }) => {
+      const startedAt = Math.floor(Date.now() / 1000);
+      if (executor.providerKind === 'claude') {
+        const model = normalizeClaudeModelId(executor.model || claudeClientRef.current.getDefaultModel());
+        const threadId = await claudeClientRef.current.createSession({
+          title: preferredThreadName.length > 60 ? `${preferredThreadName.slice(0, 60)}...` : preferredThreadName,
+          model,
+          workingDirectory: projectId || undefined,
+        });
+        await saveChatConfig({
+          thread_id: threadId,
+          model,
+          reasoning: executor.reasoning || undefined,
+        }).catch(() => {});
+        if (preferredThreadName.trim()) {
+          await claudeClientRef.current.renameSession(threadId, preferredThreadName.trim()).catch(() => {});
+        }
+        const workspaceClient = new ClaudeClient();
+        workspaceClaudeClientsRef.current.set(threadId, workspaceClient);
+        workspaceClaudeRunsRef.current.set(threadId, {
+          status: 'running',
+          prompt,
+          assistantText: '',
+          error: null,
+          startedAt,
+        });
+        void workspaceClient.sendMessage(threadId, prompt, { model }, {
+          onText: (text) => {
+            const current = workspaceClaudeRunsRef.current.get(threadId);
+            if (!current) return;
+            workspaceClaudeRunsRef.current.set(threadId, {
+              ...current,
+              assistantText: `${current.assistantText}${text}`,
+            });
+          },
+          onDone: () => {
+            const current = workspaceClaudeRunsRef.current.get(threadId);
+            if (!current) return;
+            workspaceClaudeRunsRef.current.set(threadId, {
+              ...current,
+              status: 'success',
+            });
+            void handleListThreads();
+          },
+          onError: (error) => {
+            const current = workspaceClaudeRunsRef.current.get(threadId);
+            if (!current) return;
+            workspaceClaudeRunsRef.current.set(threadId, {
+              ...current,
+              status: 'failed',
+              error,
+            });
+          },
+        });
+        void handleListThreads();
+        return {
+          threadId,
+          providerKind: 'claude',
+          model,
+          startedAt,
+        };
+      }
+
+      const thread = await startThreadWithConfigRecovery(projectId ? { cwd: projectId } : undefined);
+      if (!thread?.id) {
+        throw new Error('No thread ID returned');
+      }
+      if (preferredThreadName.trim()) {
+        await clientRef.current.setThreadName(thread.id, preferredThreadName.trim()).catch(() => {});
+      }
+      await saveChatConfig({
+        thread_id: thread.id,
+        model: executor.model || undefined,
+        reasoning: executor.reasoning || undefined,
+      }).catch(() => {});
+      const opts: { model?: string; reasoningEffort?: string } = {};
+      if (executor.model) opts.model = executor.model;
+      if (executor.reasoning) opts.reasoningEffort = executor.reasoning;
+      await clientRef.current.startTurn(thread.id, prompt, opts);
+      void handleListThreads();
+      return {
+        threadId: thread.id,
+        providerKind: 'codex',
+        model: executor.model || '',
+        startedAt,
+      };
+    },
+    readThread: readWorkspaceThreadDetail,
+    openThread: async (threadId: string) => {
+      setSidebarView('threads');
+      await handleReadThread(threadId);
+    },
+    listPrompts: (cwd: string | null) => invoke('list_prompts', { cwd }),
+    listProjectFolders: (cwd: string) => invoke('list_project_folders', { cwd }),
+    listGitWorktrees: (cwd: string) => invoke('list_git_worktrees', { cwd }),
+    createGitWorktree: (params: { cwd: string; branch: string; path: string }) => invoke('create_git_worktree', params),
+    removeGitWorktree: (params: { path: string; force?: boolean }) => invoke('remove_git_worktree', params),
+  }), [
+    handleListThreads,
+    handleReadThread,
+    readWorkspaceThreadDetail,
+    startThreadWithConfigRecovery,
+  ]);
+  const workspaceKanbanExecCallbacks = useMemo(() => ({
+    startThread: startThreadWithConfigRecovery,
+    startTurn: (threadId: string, text: string) => {
+      const opts: { model?: string; reasoningEffort?: string } = {};
+      if (selectedModel) opts.model = selectedModel;
+      if (reasoning) opts.reasoningEffort = reasoning;
+      return clientRef.current.startTurn(threadId, text, opts);
+    },
+    readThread: readKanbanThreadDetail,
+    onRunStarted: ({ runId, issueId, threadId }: { runId: string; issueId: string; threadId: string }) => {
+      startKanbanRunPolling({ runId, issueId, threadId });
+    },
+    onThreadObserved: handleKanbanThreadObserved,
+    setObservedThread: setObservedKanbanThread,
+    onThreadCreated: () => {
+      void refreshKanbanThreadIds();
+      void handleListThreads();
+    },
+  }), [
+    handleKanbanThreadObserved,
+    handleListThreads,
+    readKanbanThreadDetail,
+    reasoning,
+    refreshKanbanThreadIds,
+    selectedModel,
+    setObservedKanbanThread,
+    startThreadWithConfigRecovery,
+  ]);
+  const workspaceKanbanContent = useMemo(() => (
+    <KanbanPanel
+      embedded
+      projects={kanbanProjects}
+      activeProjectId={activeProjectCwd}
+      onProjectSelect={handleSelectWorkspaceProject}
+      executionSyncVersion={kanbanExecutionRevision}
+      executionModelLabel={kanbanExecutionModelLabel}
+      observedThreadId={observedKanbanThreadId}
+      observedThreadDetail={observedKanbanThreadDetail}
+      onOpenWorkspace={handleOpenWorkspaceFromKanban}
+      execCallbacks={workspaceKanbanExecCallbacks}
+    />
+  ), [
+    activeProjectCwd,
+    handleOpenWorkspaceFromKanban,
+    handleSelectWorkspaceProject,
+    kanbanExecutionModelLabel,
+    kanbanExecutionRevision,
+    kanbanProjects,
+    observedKanbanThreadDetail,
+    observedKanbanThreadId,
+    workspaceKanbanExecCallbacks,
+  ]);
   const handleOpenSettingsView = useCallback(() => {
     setSidebarView('settings');
   }, []);
@@ -5582,47 +5867,19 @@ export function App() {
             <div className="main-content-body">
               <div className="main-content-primary">
                 <WorkspacePanel
-                  projects={workspaceProjects}
                   activeProjectId={activeProjectCwd}
                   activeIssueId={workspaceIssueContext.projectId === activeProjectCwd ? workspaceIssueContext.issueId : null}
                   activeIssueLabel={workspaceIssueContext.projectId === activeProjectCwd ? workspaceIssueContext.issueLabel : null}
+                  activeWorkspaceRoots={activeWorkspaceRoots}
+                  folderAlias={folderAlias}
+                  execBridge={workspaceExecBridge}
                   section={workspaceSection}
                   prefill={workspacePrefill}
-                  kanbanContent={(
-                    <KanbanPanel
-                      embedded
-                      projects={kanbanProjects}
-                      activeProjectId={activeProjectCwd}
-                      onProjectSelect={handleSelectWorkspaceProject}
-                      executionSyncVersion={kanbanExecutionRevision}
-                      executionModelLabel={kanbanExecutionModelLabel}
-                      observedThreadId={observedKanbanThreadId}
-                      observedThreadDetail={observedKanbanThreadDetail}
-                      onOpenWorkspace={handleOpenWorkspaceFromKanban}
-                      execCallbacks={{
-                        startThread: startThreadWithConfigRecovery,
-                        startTurn: (threadId, text) => {
-                          const opts: { model?: string; reasoningEffort?: string } = {};
-                          if (selectedModel) opts.model = selectedModel;
-                          if (reasoning) opts.reasoningEffort = reasoning;
-                          return clientRef.current.startTurn(threadId, text, opts);
-                        },
-                        readThread: readKanbanThreadDetail,
-                        onRunStarted: ({ runId, issueId, threadId }) => {
-                          startKanbanRunPolling({ runId, issueId, threadId });
-                        },
-                        onThreadObserved: handleKanbanThreadObserved,
-                        setObservedThread: setObservedKanbanThread,
-                        onThreadCreated: () => { void refreshKanbanThreadIds(); void handleListThreads(); },
-                      }}
-                    />
-                  )}
-                  onPrefillConsumed={(seedId) => {
-                    setWorkspacePrefill((current) => (current?.seedId === seedId ? null : current));
-                  }}
+                  kanbanContent={workspaceKanbanContent}
+                  onPrefillConsumed={handleWorkspacePrefillConsumed}
                   onSectionChange={setWorkspaceSection}
                   onProjectSelect={handleSelectWorkspaceProject}
-                  windowControls={<WindowControls />}
+                  windowControls={workspaceWindowControls}
                 />
               </div>
               {rightSidebarEl}
@@ -5865,7 +6122,7 @@ export function App() {
                           <span>Not connected</span>
                           <span style={{ margin: '0 2px' }}>·</span>
                           <button
-                            style={{ background: 'none', border: 'none', color: 'var(--accent-green)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                            className="server-startup-link"
                             onClick={() => { setSidebarView('settings'); }}
                           >
                             Settings

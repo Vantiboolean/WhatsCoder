@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { KanbanIssue, KanbanStatus } from '../../lib/db/kanbanDb';
-import type { WorkspaceDraftSummary } from '../../lib/utils/workspaceDrafts';
+import type { WorkspaceSummary } from '../../lib/workspace/types';
 import { IssueCard } from './IssueCard';
 import { QuickAddInput } from './QuickAddInput';
 
@@ -48,7 +48,7 @@ export const KanbanColumn = memo(function KanbanColumn({
   onViewThread?: (issue: KanbanIssue) => void;
   onOpenWorkspaceIssue?: (issue: KanbanIssue) => void;
   executingIssueIds?: Set<string>;
-  workspaceSummaryByIssue?: Record<string, WorkspaceDraftSummary>;
+  workspaceSummaryByIssue?: Record<string, WorkspaceSummary>;
 }) {
   const { t } = useTranslation();
   const statusColors: Record<KanbanStatus, string> = {

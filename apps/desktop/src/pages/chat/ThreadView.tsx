@@ -25,7 +25,7 @@ class MarkdownErrorBoundary extends Component<{ children: ReactNode; fallback: s
 
   render() {
     if (this.state.hasError) {
-      return <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>{this.props.fallback}</pre>;
+      return <pre className="tv-fallback-pre">{this.props.fallback}</pre>;
     }
     return this.props.children;
   }
@@ -269,21 +269,7 @@ export const ThreadView = memo(function ThreadView({
       )}
 
       {showRawJson ? (
-        <pre
-          style={{
-            flex: 1,
-            overflow: 'auto',
-            margin: 0,
-            padding: '12px 20px',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 12,
-            lineHeight: 1.6,
-            color: 'var(--text-secondary)',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            background: 'var(--bg-tertiary)',
-          }}
-        >
+        <pre className="tv-raw-json">
           {rawJson}
         </pre>
       ) : (
@@ -747,14 +733,9 @@ const AgentMessage = memo(function AgentMessage({
 
   if (isStreaming) {
     return (
-      <div className="tv-agent-row">
-        <div className="tv-agent-bubble tv-markdown-body">
-          <div
-            style={{
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}
-          >
+        <div className="tv-agent-row">
+          <div className="tv-agent-bubble tv-markdown-body">
+          <div className="tv-streaming-text">
             {text}
           </div>
         </div>
@@ -797,11 +778,11 @@ const Reasoning = memo(function Reasoning({ item }: { item: ThreadItem }) {
     <div className="tv-reasoning">
       <button className="tv-reasoning-toggle" onClick={() => setOpen((value) => !value)}>
         <svg
+          className={`tv-reasoning-chevron${open ? ' tv-reasoning-chevron--open' : ''}`}
           width="12"
           height="12"
           viewBox="0 0 12 12"
           fill="currentColor"
-          style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}
         >
           <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -872,7 +853,7 @@ const CommandExecution = memo(function CommandExecution({ item }: { item: Thread
           <TruncatedOutput text={item.aggregatedOutput} />
         </details>
       ) : running ? (
-        <div className="tv-cmd-output" style={{ padding: '4px 12px', color: 'var(--text-tertiary)', fontSize: 12 }}>
+        <div className="tv-cmd-output tv-cmd-running">
           {t('thread.running')}
         </div>
       ) : null}
@@ -1130,7 +1111,7 @@ const ToolCall = memo(function ToolCall({ item }: { item: ThreadItem }) {
       {resultNode && (
         <details className="tv-tool-section" open={isFailed || isRunning}>
           <summary className="tv-tool-section-header">{isFailed ? t('thread.resultFailed') : t('thread.result')}</summary>
-          <div style={{ overflow: 'auto' }}>{resultNode}</div>
+          <div className="tv-tool-result-wrap">{resultNode}</div>
         </details>
       )}
       {item.error?.message && (
@@ -1170,19 +1151,19 @@ function RealtimeAudioItem({ item }: { item: ThreadItem }) {
       </div>
       <div className="tv-cmd-body">
         {item.text && (
-          <div className="tv-detail-value" style={{ marginBottom: stats.length > 0 || itemId ? 8 : 0 }}>
+          <div className={`tv-detail-value${stats.length > 0 || itemId ? ' tv-detail-value--spaced' : ''}`}>
             {item.text}
           </div>
         )}
         {stats.length > 0 && (
-          <div style={{ color: 'var(--text-secondary)', fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: itemId ? 8 : 0 }}>
+          <div className={`tv-realtime-stats${itemId ? ' tv-realtime-stats--spaced' : ''}`}>
             {stats.map((entry) => (
               <span key={entry}>{entry}</span>
             ))}
           </div>
         )}
         {itemId && (
-          <div style={{ color: 'var(--text-tertiary)', fontSize: 12, fontFamily: 'var(--font-mono)', marginBottom: item.progressMessages?.length ? 8 : 0 }}>
+          <div className={`tv-realtime-item-id${item.progressMessages?.length ? ' tv-realtime-item-id--spaced' : ''}`}>
             itemId: {itemId}
           </div>
         )}
@@ -1225,9 +1206,9 @@ function WebSearchItem({ item }: { item: ThreadItem }) {
       </div>
       <div className="tv-cmd-body">
         {item.query && (
-          <div style={{ marginBottom: detail ? 8 : 0 }}>
+          <div className={`tv-websearch-query${detail ? ' tv-websearch-query--spaced' : ''}`}>
             <div className="tv-detail-label">{t('thread.query')}</div>
-            <div className="tv-markdown-body" style={{ fontSize: 13 }}>
+            <div className="tv-markdown-body tv-websearch-query-text">
               <Markdown>{item.query}</Markdown>
             </div>
           </div>
@@ -1258,10 +1239,10 @@ function ImageViewItem({ item }: { item: ThreadItem }) {
                 (event.target as HTMLImageElement).style.display = 'none';
               }}
             />
-            <div className="tv-image-caption" style={{ marginTop: 8 }}>{item.path}</div>
+            <div className="tv-image-caption">{item.path}</div>
           </>
         ) : (
-          <span style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>{t('thread.imageViewed')}</span>
+          <span className="tv-image-empty">{t('thread.imageViewed')}</span>
         )}
       </div>
     </div>
@@ -1279,8 +1260,8 @@ function ImageGenerationItem({ item }: { item: ThreadItem }) {
       </div>
       <div className="tv-cmd-body">
         {item.revisedPrompt && (
-          <div style={{ marginBottom: 8 }}>
-            <strong style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{t('thread.prompt')}</strong>
+          <div className="tv-image-prompt">
+            <strong className="tv-image-prompt-label">{t('thread.prompt')}</strong>
             <div className="tv-detail-value">{item.revisedPrompt}</div>
           </div>
         )}

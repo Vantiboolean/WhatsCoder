@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ProviderRow, ProviderAppType } from '../../lib/db/db';
 
@@ -82,10 +82,13 @@ export const ProviderCard = memo(function ProviderCard({
   const categoryLabel = provider.category
     ? (CATEGORY_KEYS[provider.category] ? t(CATEGORY_KEYS[provider.category]) : provider.category)
     : null;
+  const providerAccentStyle = provider.icon_color
+    ? ({ ['--provider-accent' as const]: provider.icon_color } as CSSProperties)
+    : undefined;
 
   return (
-    <div className={`provider-card${isCurrent ? ' provider-card--active' : ''}`}>
-      <div className="provider-card-icon" style={provider.icon_color ? { color: provider.icon_color } : undefined}>
+    <div className={`provider-card${isCurrent ? ' provider-card--active' : ''}`} style={providerAccentStyle}>
+      <div className="provider-card-icon">
         {provider.icon || appIcon(appType)}
       </div>
 
