@@ -15,41 +15,7 @@ import type {
 export const ALL_WEEKDAYS: Weekday[] = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
 export const WORK_WEEKDAYS: Weekday[] = ['MO', 'TU', 'WE', 'TH', 'FR'];
 
-export const WEEKDAY_LABELS: Record<Weekday, string> = {
-  MO: 'Mon',
-  TU: 'Tue',
-  WE: 'Wed',
-  TH: 'Thu',
-  FR: 'Fri',
-  SA: 'Sat',
-  SU: 'Sun',
-};
-
-export const MODE_LABELS: Record<ScheduleMode, string> = {
-  daily: 'Every day',
-  weekly: 'Weekly',
-  weekdays: 'Weekdays',
-  custom: 'Custom',
-};
-
-export const EXECUTION_STATE_LABELS: Record<AutomationExecutionState, string> = {
-  RUNNING: 'Running',
-  SUCCESS: 'Succeeded',
-  FAILED: 'Failed',
-  RETRYING: 'Retrying',
-};
-
-export const RUN_STATUS_LABELS: Record<AutomationRunStatus, string> = {
-  RUNNING: 'Running',
-  SUCCESS: 'Succeeded',
-  FAILED: 'Failed',
-};
-
-export const TRIGGER_SOURCE_LABELS: Record<AutomationTriggerSource, string> = {
-  manual: 'Manual',
-  schedule: 'Schedule',
-  retry: 'Retry',
-};
+export type AutomationTranslate = (key: string, options?: Record<string, unknown>) => string;
 
 export function makeSchedule(cfg: {
   mode: ScheduleMode;
@@ -82,29 +48,57 @@ export function automationRowToScheduleConfig(
   };
 }
 
-export function formatScheduleSummary(cfg: AutomationScheduleConfig): string {
+export function getAutomationWeekdayLabel(day: Weekday, t: AutomationTranslate): string {
+  return t(`automations.weekdays.${day}`);
+}
+
+export function getAutomationScheduleModeLabel(mode: ScheduleMode, t: AutomationTranslate): string {
+  return t(`automations.scheduleModes.${mode}`);
+}
+
+export function getAutomationExecutionStateLabel(state: AutomationExecutionState, t: AutomationTranslate): string {
+  return t(`automations.executionStates.${state}`);
+}
+
+export function getAutomationRunStatusLabel(status: AutomationRunStatus, t: AutomationTranslate): string {
+  return t(`automations.runStatuses.${status}`);
+}
+
+export function getAutomationTriggerSourceLabel(source: AutomationTriggerSource, t: AutomationTranslate): string {
+  return t(`automations.triggerSources.${source}`);
+}
+
+export function formatScheduleSummary(cfg: AutomationScheduleConfig, t: AutomationTranslate): string {
   const timeStr = cfg.time || '09:00';
   switch (cfg.mode) {
     case 'daily':
-      return `Every day at ${timeStr}`;
+      return t('automations.scheduleSummaryDaily', { time: timeStr });
     case 'weekdays':
-      return `Weekdays at ${timeStr}`;
+      return t('automations.scheduleSummaryWeekdays', { time: timeStr });
     case 'weekly': {
-      const days = cfg.weekdays.map((day) => WEEKDAY_LABELS[day]).join(', ');
-      return `Weekly on ${days} at ${timeStr}`;
+      const days = cfg.weekdays.map((day) => getAutomationWeekdayLabel(day, t)).join(', ');
+      return t('automations.scheduleSummaryWeekly', { days, time: timeStr });
     }
     case 'custom': {
-      const days = cfg.weekdays.map((day) => WEEKDAY_LABELS[day]).join(', ');
+      const days = cfg.weekdays.map((day) => getAutomationWeekdayLabel(day, t)).join(', ');
       if (cfg.intervalHours && cfg.intervalHours < 24) {
-        return `Every ${cfg.intervalHours}h starting at ${timeStr} on ${days}`;
+        return t('automations.scheduleSummaryEveryHoursStarting', {
+          hours: cfg.intervalHours,
+          time: timeStr,
+          days,
+        });
       }
       if (cfg.intervalHours) {
-        return `Every ${cfg.intervalHours}h at ${timeStr} on ${days}`;
+        return t('automations.scheduleSummaryEveryHours', {
+          hours: cfg.intervalHours,
+          time: timeStr,
+          days,
+        });
       }
-      return cfg.customRrule || `Custom schedule at ${timeStr}`;
+      return cfg.customRrule || t('automations.scheduleSummaryCustom', { time: timeStr });
     }
     default:
-      return `At ${timeStr}`;
+      return t('automations.scheduleSummaryAt', { time: timeStr });
   }
 }
 
@@ -197,23 +191,32 @@ export function computeNextRun(cfg: AutomationScheduleConfig, now = new Date()):
   return Math.floor((current.getTime() + 86400_000) / 1000);
 }
 
-export function formatTimestamp(ts: number | null, now = new Date()): string {
+export function formatTimestamp(
+  ts: number | null,
+  t: AutomationTranslate,
+  locale?: string,
+  now = new Date(),
+): string {
   if (!ts) return '-';
   const date = new Date(ts * 1000);
   const diffMs = date.getTime() - now.getTime();
   const absDiffMs = Math.abs(diffMs);
 
-  if (absDiffMs < 60_000) return diffMs > 0 ? 'in <1 min' : 'just now';
+  if (absDiffMs < 60_000) return diffMs > 0 ? t('automations.timestampLessThanMinuteFuture') : t('automations.timestampJustNow');
   if (absDiffMs < 3600_000) {
     const minutes = Math.floor(absDiffMs / 60_000);
-    return diffMs > 0 ? `in ${minutes} min` : `${minutes} min ago`;
+    return diffMs > 0
+      ? t('automations.timestampInMinutes', { count: minutes })
+      : t('automations.timestampMinutesAgo', { count: minutes });
   }
   if (absDiffMs < 86400_000) {
     const hours = Math.floor(absDiffMs / 3600_000);
-    return diffMs > 0 ? `in ${hours}h` : `${hours}h ago`;
+    return diffMs > 0
+      ? t('automations.timestampInHours', { count: hours })
+      : t('automations.timestampHoursAgo', { count: hours });
   }
 
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString(locale, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

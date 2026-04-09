@@ -16,18 +16,18 @@ import {
 } from '../../lib/db/db';
 import {
   ALL_WEEKDAYS,
-  EXECUTION_STATE_LABELS,
   WORK_WEEKDAYS,
-  MODE_LABELS,
-  RUN_STATUS_LABELS,
-  TRIGGER_SOURCE_LABELS,
-  WEEKDAY_LABELS,
   makeSchedule,
   automationRowToScheduleConfig,
   computeNextRun,
   computeRetryDelaySeconds,
-  formatScheduleSummary,
   formatTimestamp,
+  formatScheduleSummary,
+  getAutomationExecutionStateLabel,
+  getAutomationRunStatusLabel,
+  getAutomationScheduleModeLabel,
+  getAutomationTriggerSourceLabel,
+  getAutomationWeekdayLabel,
 } from '../../lib/utils/automations';
 import { DesktopEmptyState, DesktopPageShell } from '../layout/DesktopPageShell';
 
@@ -272,7 +272,7 @@ export function AutomationsPanel({
   onOpenThread,
   windowControls,
 }: AutomationsPanelProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const defaultProjectCwd = activeProjectCwd ?? projects[0]?.cwd ?? null;
   const [automations, setAutomations] = useState<AutomationRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -527,6 +527,21 @@ export function AutomationsPanel({
   }, []);
 
   const canSave = draft.name.trim().length > 0 && draft.prompt.trim().length > 0;
+  const formatAutomationTimestamp = useCallback(
+    (ts: number | null) => formatTimestamp(ts, t, i18n.language),
+    [i18n.language, t],
+  );
+  const formatAutomationScheduleSummary = useCallback(
+    (cfg: AutomationScheduleConfig) => formatScheduleSummary(cfg, t),
+    [t],
+  );
+  const scheduleModeOptions = useMemo(
+    () => (['daily', 'weekly', 'weekdays', 'custom'] as ScheduleMode[]).map((mode) => ({
+      value: mode,
+      label: getAutomationScheduleModeLabel(mode, t),
+    })),
+    [t],
+  );
   const retryPreview = useMemo(() => {
     if (!draft.retryEnabled) return null;
     const firstDelay = Math.round(computeRetryDelaySeconds(draft.retryBackoffMinutes, 1) / 60);
@@ -553,186 +568,255 @@ export function AutomationsPanel({
       <DesktopPageShell
         className="automations-panel"
         bodyClassName="automations-panel__body automations-panel__body--editor"
-        title={draft.id ? draft.name || t('common.edit') : t('automations.newAutomation')}
+        title={draft.name || t('automations.newAutomation')}
         windowControls={windowControls}
-        actions={viewMode === 'detail' && draft.id ? (
-          <>
-            <button
-              className="automations-action-btn automations-action-btn--run"
-              onClick={() => { const row = automations.find(a => a.id === draft.id); if (row) void handleRunNow(row); }}
-              disabled={runningId === draft.id}
-              title={t('automations.runNow')}
-            >
-              {runningId === draft.id ? (
-                <svg className="automations-spinner" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20 14" /></svg>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="5,3 13,8 5,13"/></svg>
-              )}
-              {t('automations.runNow')}
-            </button>
-            {selectedAutomation?.last_thread_id && onOpenThread && (
-              <button
-                className="automations-action-btn"
-                onClick={() => handleOpenLastThread(selectedAutomation.last_thread_id!)}
-                title={t('automations.openThread')}
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M6 3h7v7" />
-                  <path d="M10.5 5.5L4.5 11.5" />
-                  <path d="M3 6v7h7" />
-                </svg>
-                {t('automations.openThread')}
-              </button>
-            )}
-            {draft.status === 'ACTIVE' ? (
-              <button className="automations-action-btn" onClick={() => setDraft(d => ({ ...d, status: 'PAUSED' }))} title={t('automations.pause')}>
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="3" width="3" height="10" rx="0.5"/><rect x="9" y="3" width="3" height="10" rx="0.5"/></svg>
-                {t('automations.pause')}
-              </button>
-            ) : (
-              <button className="automations-action-btn automations-action-btn--resume" onClick={() => setDraft(d => ({ ...d, status: 'ACTIVE' }))} title={t('automations.resume')}>
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="5,3 13,8 5,13"/></svg>
-                {t('automations.resume')}
-              </button>
-            )}
-            <button className="automations-action-btn automations-action-btn--danger" onClick={() => setConfirmDeleteId(draft.id)} title={t('common.delete')}>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5h10M5.5 5V3.5a1 1 0 011-1h3a1 1 0 011 1V5M6.5 7.5v4M9.5 7.5v4"/><path d="M4 5l.7 8.4a1 1 0 001 .9h4.6a1 1 0 001-.9L12 5"/></svg>
-            </button>
-          </>
-        ) : null}
+        actions={null}
       >
-        {panelErrorBanner}
-
         {confirmDeleteId && (
           <div className="automations-confirm-overlay">
             <div className="automations-confirm-card">
               <h3>{t('automations.deleteConfirm', { name: draft.name || t('automations.unnamedAutomation') })}</h3>
               <p>{t('automations.deleteWarning')}</p>
               <div className="automations-confirm-actions">
-                <button className="btn-secondary" onClick={() => setConfirmDeleteId(null)}>{t('common.cancel')}</button>
-                <button className="btn-danger" onClick={() => void handleDelete(confirmDeleteId)}>{t('automations.deleteAutomation')}</button>
+                <button type="button" className="btn-secondary" onClick={() => setConfirmDeleteId(null)}>{t('common.cancel')}</button>
+                <button type="button" className="btn-danger" onClick={() => void handleDelete(confirmDeleteId)}>{t('automations.deleteAutomation')}</button>
               </div>
             </div>
           </div>
         )}
 
         <div className="automations-editor">
-            <form onSubmit={e => { e.preventDefault(); void handleSave(); }}>
-            {/* Name */}
-            <div className="automations-field">
-              <label>{t('automations.name')}</label>
-              <input
-                value={draft.name}
-                onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
-                placeholder={t('automations.promptPlaceholder')}
-                autoFocus
-              />
-            </div>
-
-            <div className="automations-field">
-              <label>{t('automations.project')}</label>
-              <select
-                value={draft.projectCwd ?? ''}
-                onChange={e => setDraft(d => ({ ...d, projectCwd: e.target.value || null }))}
-                className="automations-select"
-              >
-                <option value="">{t('automations.noProjectBinding')}</option>
-                {projectOptions.map(project => (
-                  <option key={project.cwd} value={project.cwd}>{project.label}</option>
-                ))}
-              </select>
-              <span className="automations-field-help">
-                {projectOptions.length > 0
-                  ? t('automations.projectHelpWhenProjects')
-                  : t('automations.projectHelpNoProjects')}
-              </span>
-            </div>
-
-            {/* Prompt */}
-            <div className="automations-field">
-              <label>{t('automations.promptLabel')}</label>
-              <textarea
-                value={draft.prompt}
-                onChange={e => setDraft(d => ({ ...d, prompt: e.target.value }))}
-                placeholder={t('automations.promptDesc')}
-                rows={6}
-              />
-            </div>
-
-            {/* Schedule Mode */}
-            <div className="automations-field">
-              <label>{t('automations.schedule')}</label>
-              <div className="automations-schedule-grid">
-                <select
-                  value={draft.scheduleConfig.mode}
-                  onChange={e => {
-                    const mode = e.target.value as ScheduleMode;
-                    setDraft(d => ({
-                      ...d,
-                      scheduleConfig: {
-                        ...d.scheduleConfig,
-                        mode,
-                        weekdays: mode === 'weekdays' ? WORK_WEEKDAYS : mode === 'daily' ? ALL_WEEKDAYS : d.scheduleConfig.weekdays,
-                      },
-                    }));
-                  }}
-                  className="automations-select"
+          <div className="automations-editor-topbar">
+            <button type="button" className="automations-back-btn" onClick={handleBack} title={t('automations.back')}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10.5 3.5L5 8l5.5 4.5" />
+              </svg>
+              <span>{t('automations.back')}</span>
+            </button>
+            <div className="automations-editor-topbar-actions">
+              {viewMode === 'detail' && draft.id && selectedAutomation && (
+                <button
+                  type="button"
+                  className="automations-action-btn automations-action-btn--run"
+                  onClick={() => void handleRunNow(selectedAutomation)}
+                  disabled={runningId === draft.id}
+                  title={t('automations.runNow')}
                 >
-                  {Object.entries(MODE_LABELS).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
+                  {runningId === draft.id ? (
+                    <svg className="automations-spinner" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20 14" /></svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="5,3 13,8 5,13" /></svg>
+                  )}
+                  {t('automations.runNow')}
+                </button>
+              )}
+              {viewMode === 'detail' && draft.id && selectedAutomation?.last_thread_id && onOpenThread && (
+                <button
+                  type="button"
+                  className="automations-action-btn"
+                  onClick={() => handleOpenLastThread(selectedAutomation.last_thread_id!)}
+                  title={t('automations.openThread')}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M6 3h7v7" />
+                    <path d="M10.5 5.5L4.5 11.5" />
+                    <path d="M3 6v7h7" />
+                  </svg>
+                  {t('automations.openThread')}
+                </button>
+              )}
+              {viewMode === 'detail' && draft.id && (
+                draft.status === 'ACTIVE' ? (
+                  <button type="button" className="automations-action-btn" onClick={() => setDraft(d => ({ ...d, status: 'PAUSED' }))} title={t('automations.pause')}>
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="3" width="3" height="10" rx="0.5" /><rect x="9" y="3" width="3" height="10" rx="0.5" /></svg>
+                    {t('automations.pause')}
+                  </button>
+                ) : (
+                  <button type="button" className="automations-action-btn automations-action-btn--resume" onClick={() => setDraft(d => ({ ...d, status: 'ACTIVE' }))} title={t('automations.resume')}>
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><polygon points="5,3 13,8 5,13" /></svg>
+                    {t('automations.resume')}
+                  </button>
+                )
+              )}
+              {viewMode === 'detail' && draft.id && (
+                <button type="button" className="automations-icon-btn automations-icon-btn--danger" onClick={() => setConfirmDeleteId(draft.id)} title={t('common.delete')}>
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5h10M5.5 5V3.5a1 1 0 011-1h3a1 1 0 011 1V5M6.5 7.5v4M9.5 7.5v4" /><path d="M4 5l.7 8.4a1 1 0 001 .9h4.6a1 1 0 001-.9L12 5" /></svg>
+                </button>
+              )}
+              <button type="button" className="btn-secondary" onClick={handleBack}>{t('common.cancel')}</button>
+              <button type="submit" form="automations-editor-form" className="btn-primary" disabled={!canSave || saving}>
+                {saving ? t('composer.saving') : draft.id ? t('automations.saveChanges') : t('automations.createAutomation')}
+              </button>
+            </div>
+          </div>
+
+          {panelErrorBanner}
+
+          {selectedAutomation && (
+            <div className="automations-status-bar">
+              <div className="automations-status-bar-item">
+                <span className="automations-meta-label">{t('automations.statusLabel')}</span>
+                <span className={`automations-status-badge automations-status-badge--${draft.status.toLowerCase()}`}>
+                  {draft.status === 'ACTIVE' ? t('automations.active') : t('automations.paused')}
+                </span>
+              </div>
+              <div className="automations-status-bar-sep" />
+              <div className="automations-status-bar-item">
+                <span className="automations-meta-label">{t('automations.lastResult')}</span>
+                <span className={`automations-run-state-badge${selectedAutomation.last_run_status ? ` automations-run-state-badge--${selectedAutomation.last_run_status.toLowerCase()}` : ''}`}>
+                  {selectedAutomation.last_run_status ? getAutomationExecutionStateLabel(selectedAutomation.last_run_status, t) : t('automations.neverRun')}
+                </span>
+              </div>
+              <div className="automations-status-bar-sep" />
+              <div className="automations-status-bar-item">
+                <span className="automations-meta-label">{t('automations.nextRun')}</span>
+                <span className="automations-status-bar-val">{draft.status === 'PAUSED' ? '-' : formatAutomationTimestamp(selectedAutomation.next_run_at)}</span>
+              </div>
+              <div className="automations-status-bar-sep" />
+              <div className="automations-status-bar-item">
+                <span className="automations-meta-label">{t('automations.lastRun')}</span>
+                <span className="automations-status-bar-val">{formatAutomationTimestamp(selectedAutomation.last_run_at)}</span>
+              </div>
+            </div>
+          )}
+
+          {selectedAutomation?.last_error && (
+            <div className="automations-error-banner">
+              <strong>{t('automations.lastError')}</strong>
+              <span>{selectedAutomation.last_error}</span>
+            </div>
+          )}
+
+          <form
+            id="automations-editor-form"
+            className="automations-editor-form"
+            onSubmit={e => { e.preventDefault(); void handleSave(); }}
+          >
+            <div className="automations-form-section">
+              <div className="automations-form-section-title">{t('automations.name')}</div>
+              <div className="automations-field">
+                <input
+                  className="automations-field-input"
+                  value={draft.name}
+                  onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
+                  placeholder={t('automations.promptPlaceholder')}
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="automations-form-section">
+              <div className="automations-form-section-title">{t('automations.project')}</div>
+              <div className="automations-field">
+                <select
+                  value={draft.projectCwd ?? ''}
+                  onChange={e => setDraft(d => ({ ...d, projectCwd: e.target.value || null }))}
+                  className="automations-select automations-select--full"
+                >
+                  <option value="">{t('automations.noProjectBinding')}</option>
+                  {projectOptions.map(project => (
+                    <option key={project.cwd} value={project.cwd}>{project.label}</option>
                   ))}
                 </select>
+                <span className="automations-field-help">
+                  {projectOptions.length > 0
+                    ? t('automations.projectHelpWhenProjects')
+                    : t('automations.projectHelpNoProjects')}
+                </span>
+              </div>
+            </div>
 
-                <input
-                  type="time"
-                  value={draft.scheduleConfig.time}
-                  onChange={e => setDraft(d => ({ ...d, scheduleConfig: { ...d.scheduleConfig, time: e.target.value } }))}
-                  className="automations-time-input"
+            <div className="automations-form-section automations-form-section--grow">
+              <div className="automations-form-section-title">{t('automations.promptLabel')}</div>
+              <div className="automations-field">
+                <textarea
+                  className="automations-field-textarea"
+                  value={draft.prompt}
+                  onChange={e => setDraft(d => ({ ...d, prompt: e.target.value }))}
+                  placeholder={t('automations.promptDesc')}
+                  rows={6}
                 />
               </div>
             </div>
 
-            {/* Weekday picker (for weekly / custom) */}
-            {(draft.scheduleConfig.mode === 'weekly' || draft.scheduleConfig.mode === 'custom') && (
+            <div className="automations-form-section">
+              <div className="automations-form-section-title">{t('automations.schedule')}</div>
               <div className="automations-field">
-                <label>{t('automations.days')}</label>
-                <div className="automations-weekday-picker">
-                  {ALL_WEEKDAYS.map(day => {
-                    const active = draft.scheduleConfig.weekdays.includes(day);
-                    return (
-                      <button
-                        key={day}
-                        type="button"
-                        className={`automations-weekday-btn${active ? ' automations-weekday-btn--active' : ''}`}
-                        onClick={() => {
-                          setDraft(d => {
-                            const wds = d.scheduleConfig.weekdays;
-                            const next = active ? wds.filter(w => w !== day) : [...wds, day];
-                            return { ...d, scheduleConfig: { ...d.scheduleConfig, weekdays: next.length > 0 ? next : [day] } };
-                          });
-                        }}
-                      >
-                        {WEEKDAY_LABELS[day]}
-                      </button>
-                    );
-                  })}
+                <div className="automations-schedule-row">
+                  <select
+                    value={draft.scheduleConfig.mode}
+                    onChange={e => {
+                      const mode = e.target.value as ScheduleMode;
+                      setDraft(d => ({
+                        ...d,
+                        scheduleConfig: {
+                          ...d.scheduleConfig,
+                          mode,
+                          weekdays: mode === 'weekdays' ? WORK_WEEKDAYS : mode === 'daily' ? ALL_WEEKDAYS : d.scheduleConfig.weekdays,
+                        },
+                      }));
+                    }}
+                    className="automations-select"
+                  >
+                    {scheduleModeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+
+                  <input
+                    type="time"
+                    value={draft.scheduleConfig.time}
+                    onChange={e => setDraft(d => ({ ...d, scheduleConfig: { ...d.scheduleConfig, time: e.target.value } }))}
+                    className="automations-time-input"
+                  />
                 </div>
               </div>
-            )}
 
-            {/* Custom interval */}
-            {draft.scheduleConfig.mode === 'custom' && (
-              <div className="automations-field">
-                <label>{t('automations.intervalHours')}</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={draft.scheduleConfig.intervalHours ?? 24}
-                  onChange={e => setDraft(d => ({ ...d, scheduleConfig: { ...d.scheduleConfig, intervalHours: parseInt(e.target.value) || 24 } }))}
-                  className="automations-number-input"
-                />
+              {(draft.scheduleConfig.mode === 'weekly' || draft.scheduleConfig.mode === 'custom') && (
+                <div className="automations-field">
+                  <span className="automations-field-help">{t('automations.days')}</span>
+                  <div className="automations-weekday-picker">
+                    {ALL_WEEKDAYS.map(day => {
+                      const active = draft.scheduleConfig.weekdays.includes(day);
+                      return (
+                        <button
+                          key={day}
+                          type="button"
+                          className={`automations-weekday-btn${active ? ' automations-weekday-btn--active' : ''}`}
+                          onClick={() => {
+                            setDraft(d => {
+                              const wds = d.scheduleConfig.weekdays;
+                              const next = active ? wds.filter(w => w !== day) : [...wds, day];
+                              return { ...d, scheduleConfig: { ...d.scheduleConfig, weekdays: next.length > 0 ? next : [day] } };
+                            });
+                          }}
+                        >
+                          {getAutomationWeekdayLabel(day, t)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {draft.scheduleConfig.mode === 'custom' && (
+                <div className="automations-inline-field">
+                  <span className="automations-field-help">{t('automations.intervalHours')}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={draft.scheduleConfig.intervalHours ?? 24}
+                    onChange={e => setDraft(d => ({ ...d, scheduleConfig: { ...d.scheduleConfig, intervalHours: parseInt(e.target.value) || 24 } }))}
+                    className="automations-number-input"
+                  />
+                </div>
+              )}
+
+              <div className="automations-schedule-summary">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 5v3l2.5 1.5" /></svg>
+                <span>{formatAutomationScheduleSummary(draft.scheduleConfig)}</span>
               </div>
-            )}
+            </div>
 
             <div className="automations-section-card">
               <div className="automations-section-card-header">
@@ -783,70 +867,6 @@ export function AutomationsPanel({
               </label>
             </div>
 
-            {/* Status indicator for existing automations */}
-            {draft.id && selectedAutomation && (
-              <>
-                <div className="automations-meta-row">
-                  <div className="automations-meta-item">
-                    <span className="automations-meta-label">{t('automations.statusLabel')}</span>
-                    <span className={`automations-status-badge automations-status-badge--${draft.status.toLowerCase()}`}>
-                      {draft.status === 'ACTIVE' ? t('automations.active') : t('automations.paused')}
-                    </span>
-                  </div>
-                  <div className="automations-meta-item">
-                    <span className="automations-meta-label">{t('automations.lastResult')}</span>
-                    <span className={`automations-run-state-badge${selectedAutomation.last_run_status ? ` automations-run-state-badge--${selectedAutomation.last_run_status.toLowerCase()}` : ''}`}>
-                      {selectedAutomation.last_run_status ? EXECUTION_STATE_LABELS[selectedAutomation.last_run_status] : t('automations.neverRun')}
-                    </span>
-                  </div>
-                  <div className="automations-meta-item">
-                    <span className="automations-meta-label">{t('automations.project')}</span>
-                    <span>{getProjectLabel(draft.projectCwd)}</span>
-                  </div>
-                  <div className="automations-meta-item">
-                    <span className="automations-meta-label">{t('automations.nextRun')}</span>
-                    <span>{draft.status === 'PAUSED' ? '-' : formatTimestamp(selectedAutomation.next_run_at)}</span>
-                  </div>
-                  <div className="automations-meta-item">
-                    <span className="automations-meta-label">{t('automations.lastRun')}</span>
-                    <span>{formatTimestamp(selectedAutomation.last_run_at)}</span>
-                  </div>
-                  {selectedAutomation.last_thread_id && onOpenThread && (
-                    <div className="automations-meta-item">
-                      <span className="automations-meta-label">{t('automations.lastThread')}</span>
-                      <button
-                        type="button"
-                        className="automations-link-btn"
-                        onClick={() => handleOpenLastThread(selectedAutomation.last_thread_id!)}
-                      >
-                        {t('automations.openThread')}
-                      </button>
-                    </div>
-                  )}
-                </div>
-                {selectedAutomation.last_error && (
-                  <div className="automations-error-banner">
-                    <strong>{t('automations.lastError')}</strong>
-                    <span>{selectedAutomation.last_error}</span>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* Schedule summary */}
-            <div className="automations-schedule-summary">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2.5 1.5"/></svg>
-              <span>{formatScheduleSummary(draft.scheduleConfig)}</span>
-            </div>
-
-            {/* Actions */}
-            <div className="automations-editor-actions">
-              <button type="button" className="btn-secondary" onClick={handleBack}>{t('common.cancel')}</button>
-              <button type="submit" className="btn-primary" disabled={!canSave || saving}>
-                {saving ? t('composer.saving') : draft.id ? t('automations.saveChanges') : t('automations.createAutomation')}
-              </button>
-            </div>
-
             {draft.id && (
               <div className="automations-history">
                 <div className="automations-section-card-header">
@@ -868,10 +888,10 @@ export function AutomationsPanel({
                       <div key={run.id} className="automations-history-item">
                         <div className="automations-history-main">
                           <span className={`automations-run-state-badge automations-run-state-badge--${run.status.toLowerCase()}`}>
-                            {RUN_STATUS_LABELS[run.status]}
+                            {getAutomationRunStatusLabel(run.status, t)}
                           </span>
                           <span className="automations-history-meta">
-                            {TRIGGER_SOURCE_LABELS[run.trigger_source]} · {t('automations.attemptLabel', { count: run.attempt_number })} · {formatTimestamp(run.started_at)}
+                            {getAutomationTriggerSourceLabel(run.trigger_source, t)} · {t('automations.attemptLabel', { count: run.attempt_number })} · {formatAutomationTimestamp(run.started_at)}
                           </span>
                         </div>
                         <div className="automations-history-actions">
@@ -888,7 +908,7 @@ export function AutomationsPanel({
                         {run.error_message && <div className="automations-history-error">{run.error_message}</div>}
                         {run.retry_scheduled_for && (
                           <div className="automations-history-retry">
-                            {t('automations.retryScheduled')} {formatTimestamp(run.retry_scheduled_for)}
+                            {t('automations.retryScheduled')} {formatAutomationTimestamp(run.retry_scheduled_for)}
                           </div>
                         )}
                       </div>
@@ -934,7 +954,7 @@ export function AutomationsPanel({
                         <span className="automations-template-icon">{tpl.iconLabel}</span>
                         <div className="automations-template-info">
                           <div className="automations-template-name">{tpl.name}</div>
-                          <div className="automations-template-schedule">{formatScheduleSummary(tpl.scheduleConfig)}</div>
+                          <div className="automations-template-schedule">{formatAutomationScheduleSummary(tpl.scheduleConfig)}</div>
                         </div>
                       </button>
                     ))}
@@ -1007,7 +1027,7 @@ export function AutomationsPanel({
                           <span className="automations-template-icon">{tpl.iconLabel}</span>
                           <div className="automations-template-info">
                             <div className="automations-template-name">{tpl.name}</div>
-                            <div className="automations-template-schedule">{formatScheduleSummary(tpl.scheduleConfig)}</div>
+                            <div className="automations-template-schedule">{formatAutomationScheduleSummary(tpl.scheduleConfig)}</div>
                           </div>
                         </button>
                       ))}
@@ -1037,16 +1057,16 @@ export function AutomationsPanel({
                     {row.project_cwd && (
                       <span className="automations-project-badge">{getProjectLabel(row.project_cwd)}</span>
                     )}
-                    {row.last_run_status && (
-                      <span className={`automations-run-state-badge automations-run-state-badge--${row.last_run_status.toLowerCase()}`}>
-                        {EXECUTION_STATE_LABELS[row.last_run_status]}
-                      </span>
-                    )}
-                    <div className="automations-row-schedule">
-                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5.5v2.5l2 1.2"/></svg>
-                      <span>{formatScheduleSummary(automationRowToScheduleConfig(row))}</span>
+                      {row.last_run_status && (
+                        <span className={`automations-run-state-badge automations-run-state-badge--${row.last_run_status.toLowerCase()}`}>
+                        {getAutomationExecutionStateLabel(row.last_run_status, t)}
+                        </span>
+                      )}
+                      <div className="automations-row-schedule">
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5.5v2.5l2 1.2"/></svg>
+                      <span>{formatAutomationScheduleSummary(automationRowToScheduleConfig(row))}</span>
+                      </div>
                     </div>
-                  </div>
                   {row.last_error && (
                     <div className="automations-row-error" title={row.last_error}>{row.last_error}</div>
                   )}
@@ -1055,11 +1075,11 @@ export function AutomationsPanel({
                 <div className="automations-row-meta">
                   <div className="automations-row-meta-item">
                     <span className="automations-meta-label">{t('common.next')}</span>
-                    <span>{row.status === 'PAUSED' ? '-' : formatTimestamp(row.next_run_at)}</span>
+                    <span>{row.status === 'PAUSED' ? '-' : formatAutomationTimestamp(row.next_run_at)}</span>
                   </div>
                   <div className="automations-row-meta-item">
                     <span className="automations-meta-label">{t('automations.last')}</span>
-                    <span>{formatTimestamp(row.last_run_at)}</span>
+                    <span>{formatAutomationTimestamp(row.last_run_at)}</span>
                   </div>
                 </div>
 
