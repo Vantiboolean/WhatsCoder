@@ -23,6 +23,7 @@ import {
   getSettingJson,
   setSettingJson,
   addClaudeMessage,
+  getClaudeMessages,
   addChatMessage,
   getChatMessages,
   getAllChatHistory,
@@ -44,6 +45,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { automationRowToScheduleConfig, computeNextRun, computeRetryDelaySeconds } from './lib/utils/automations';
 import { DESKTOP_DYNAMIC_TOOL_SPECS, executeDesktopDynamicToolCall } from './lib/api/dynamicTools';
 import { ClaudeClient, getClaudeClient, isClaudeModelId, normalizeClaudeModelId } from './lib/api/claudeClient';
+import { codexSendMessage, codexAbortMessage, codexCheckAuth, type CodexAuthStatus } from './lib/api/rustBridge';
 import { applyServerEventToThreadDetail, findThreadItem, mergeThreadDetailWithLocalState } from './state/threadState';
 import { CodeViewer, type OverlayView } from './pages/code/CodeViewer';
 import { ThreadSidebar } from './pages/chat/ThreadSidebar';
@@ -1211,6 +1213,8 @@ function buildProviderTimeline(
 export function App() {
   const clientRef = useRef(new CodexClient());
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
+  const [codexOAuthReady, setCodexOAuthReady] = useState(false);
+  const localCodexSessionIdsRef = useRef(new Set<string>());
   const [url, setUrl] = usePersistedState('codex-ws-url', 'ws://localhost:6188/ws');
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [selectedThread, setSelectedThread] = useState<string | null>(null);
@@ -1319,17 +1323,8 @@ export function App() {
   const [activeWorkspaceRoots, setActiveWorkspaceRoots] = useState<string[]>([]);
   const [threadViewMode, setThreadViewMode] = usePersistedState<'project' | 'timeline'>('codex-thread-view-mode', 'project');
   const [threadSortBy, setThreadSortBy] = usePersistedState<'updated' | 'created'>('codex-thread-sort-by', 'updated');
-  const [appPhase, setAppPhase] = useState<'startup' | 'main'>('main');
-  const [showServerDialog, setShowServerDialog] = useState(false);
-  const [serverStarting, setServerStarting] = useState(false);
-  const [serverRunning, setServerRunning] = useState(false);
-  const [serverLog, setServerLog] = useState('');
-  const serverManagedRef = useRef(false);
   const automationRunPollsRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
   const kanbanRunPollsRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
-  const [codexBinPath, setCodexBinPath] = usePersistedState('codex-bin-path', '');
-  const [codexCandidates, setCodexCandidates] = useState<string[]>([]);
-  const codexBinPathRef = useRef(codexBinPath);
 
   // ── Claude support ──
   const claudeClientRef = useRef(getClaudeClient());
@@ -1351,7 +1346,6 @@ export function App() {
   const urlRef = useRef(url);
 
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptRef = useRef(0);
   const selectedThreadRef = useRef<string | null>(null);
@@ -1951,10 +1945,21 @@ export function App() {
 
   const refreshThreadDetail = useCallback(async (threadId: string) => {
     try {
-      const result = await clientRef.current.readThread(threadId, true);
+      // Local sessions (Claude or Codex OAuth) read from SQLite; WebSocket sessions poll the server.
+      const isLocal = localCodexSessionIdsRef.current.has(threadId) ||
+        (threadDetailRef.current?.id === threadId && threadDetailRef.current.modelProvider === 'claude') ||
+        (threadsRef.current.find((t) => t.id === threadId)?.modelProvider === 'claude');
+      let result: ThreadDetail;
+      if (isLocal) {
+        const detail = await claudeClientRef.current.getSession(threadId);
+        if (!detail) return null;
+        result = detail;
+      } else {
+        result = await clientRef.current.readThread(threadId, true);
+      }
       const config = await getChatConfig(threadId).catch(() => null);
       const merged = applyThreadConfig(
-        mergeThreadDetailWithLocalState(getCachedThreadDetail(threadId), result),
+        isLocal ? result : mergeThreadDetailWithLocalState(getCachedThreadDetail(threadId), result),
         config,
       );
       cacheThreadDetail(merged);
@@ -2013,9 +2018,6 @@ export function App() {
     const unsub = client.onStateChange((state) => {
       setConnState(state);
       if (state === 'connected') {
-        setAppPhase('main');
-        setShowServerDialog(false);
-        setServerLog('');
         reconnectAttemptRef.current = 0;
         if (reconnectTimerRef.current) {
           clearTimeout(reconnectTimerRef.current);
@@ -2718,329 +2720,45 @@ export function App() {
     }
   }, []);
 
-  const resolveLoopbackServerEndpoint = useCallback((wsUrl: string): { host: string; port: number } | null => {
+  const applyCodexAuthStatus = useCallback((status: CodexAuthStatus | null) => {
+    setCodexOAuthReady(status?.authenticated === true);
+  }, []);
+
+  const refreshCodexAuthStatus = useCallback(async () => {
     try {
-      const u = new URL(wsUrl);
-      const hostname = u.hostname.toLowerCase();
-      const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
-      if (!isLoopback) {
-        return null;
-      }
-
-      if (u.pathname === '/ws' || u.pathname === '/ws/') {
-        return { host: '127.0.0.1', port: 4500 };
-      }
-
-      return {
-        host: '127.0.0.1',
-        port: parseInt(u.port, 10) || 4500,
-      };
+      applyCodexAuthStatus(await codexCheckAuth());
     } catch {
-      return null;
+      applyCodexAuthStatus(null);
     }
-  }, []);
+  }, [applyCodexAuthStatus]);
 
-  const waitForServerReady = useCallback(async (_wsUrl: string, maxAttempts = 20, delayMs = 500): Promise<boolean> => {
-    for (let i = 0; i < maxAttempts; i++) {
-      try {
-        const res = await fetch('/readyz', { method: 'GET', signal: AbortSignal.timeout(2000) });
-        if (res.ok) return true;
-      } catch { /* retry */ }
-      await new Promise(r => setTimeout(r, delayMs));
-    }
-    return false;
-  }, []);
-
-  const startHeartbeat = useCallback(() => {
-    if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
-    heartbeatTimerRef.current = setInterval(async () => {
-      if (!serverManagedRef.current) return;
-      const currentUrl = urlRef.current;
-      try {
-        const status = await invoke<{ running: boolean; pid: number | null }>('get_codex_server_status');
-        setServerRunning(status.running);
-        if (!status.running) {
-          setServerLog('Server process exited, restarting...');
-          try {
-            const port = extractPort(currentUrl);
-            const restart = await invoke<{ running: boolean; pid: number | null }>('start_codex_server', { port });
-            if (restart.running) {
-              setServerLog('Server restarted, reconnecting...');
-              const ready = await waitForServerReady(currentUrl, 15, 600);
-              if (ready) {
-                setServerLog('');
-                await handleConnect(currentUrl);
-              } else {
-                setServerLog('Server restarted but connection timed out');
-              }
-            }
-          } catch (err) {
-            setServerLog(`Restart failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        } else if (clientRef.current.state !== 'connected' && clientRef.current.state !== 'connecting') {
-          setServerLog('Connection lost, reconnecting...');
-          try {
-            await handleConnect(currentUrl);
-            setServerLog('');
-          } catch {
-            // auto-reconnect in CodexClient will keep trying
-          }
-        }
-      } catch {
-        // invoke failed, tauri layer issue
-      }
-    }, 5000);
-  }, [extractPort, waitForServerReady, handleConnect]);
-
-  useEffect(() => { codexBinPathRef.current = codexBinPath; }, [codexBinPath]);
-
-  const fetchCodexCandidates = useCallback(async () => {
-    try {
-      const paths = await invoke<string[]>('find_codex_candidates');
-      setCodexCandidates(paths);
-    } catch { /* ignore */ }
-  }, []);
-
-  const handleBrowseCodexBinary = useCallback(async () => {
-    try {
-      const selected = await invoke<string | null>('pick_codex_binary');
-      if (selected) {
-        setCodexBinPath(selected);
-      }
-    } catch { /* ignore */ }
-  }, [setCodexBinPath]);
-
-  const handleStartServer = useCallback(async () => {
-    setServerStarting(true);
-    setServerLog('Starting codex server...');
-    try {
-      const port = extractPort(url);
-      const codexPath = codexBinPathRef.current || undefined;
-      const result = await invoke<{ running: boolean; pid: number | null }>('start_codex_server', { port, codexPath });
-      if (result.running) {
-        serverManagedRef.current = true;
-        setServerRunning(true);
-        setServerLog('Server started, waiting for it to be ready...');
-        const ready = await waitForServerReady(url, 20, 500);
-        if (ready) {
-          setServerLog('Connecting...');
-          try {
-            await handleConnect(url);
-            setShowServerDialog(false);
-            setServerLog('');
-            startHeartbeat();
-          } catch {
-            setServerLog('Server is ready but connection failed. Click "Retry Connection" to try again.');
-          }
-        } else {
-          setServerLog('Server started but not responding. Try again or check logs.');
-        }
-      } else {
-        setServerLog('Failed to start server process.');
-      }
-    } catch (err) {
-      setServerLog(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      fetchCodexCandidates();
-    } finally {
-      setServerStarting(false);
-    }
-  }, [url, extractPort, waitForServerReady, handleConnect, startHeartbeat, fetchCodexCandidates]);
-
-  const handleStopServer = useCallback(async () => {
-    try {
-      await invoke('stop_codex_server');
-      serverManagedRef.current = false;
-      setServerRunning(false);
-      if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
-    } catch { /* ignore */ }
-  }, []);
-
-  // Auto-connect on startup: try connecting, if fails auto-start server
+  // Codex OAuth replaces server auto-start — hydrate auth status on startup and
+  // keep the composer in sync with login/logout events.
   useEffect(() => {
-    let cancelled = false;
+    void refreshCodexAuthStatus();
 
-    const autoStartServer = async (retries = 2) => {
-      if (cancelled) return;
-      console.log('[auto-start] Starting auto-start flow, retries:', retries);
-      setServerStarting(true);
-      for (let attempt = 0; attempt <= retries && !cancelled; attempt++) {
-        try {
-          const port = extractPort(url);
-          const codexPath = codexBinPathRef.current || undefined;
-          console.log(`[auto-start] Attempt ${attempt + 1}/${retries + 1}: port=${port}, codexPath=${codexPath ?? 'default'}`);
-          const result = await invoke<{ running: boolean; pid: number | null }>('start_codex_server', { port, codexPath });
-          console.log('[auto-start] start_codex_server result:', result);
-          if (cancelled) return;
-          if (result.running) {
-            serverManagedRef.current = true;
-            setServerRunning(true);
-            console.log('[auto-start] Server spawned, waiting for ready...');
-            const ready = await waitForServerReady(url, 20, 500);
-            console.log('[auto-start] Server ready:', ready);
-            if (cancelled) return;
-            if (ready) {
-              try {
-                console.log('[auto-start] Connecting to', url);
-                await handleConnect(url);
-                if (!cancelled) {
-                  console.log('[auto-start] Connected successfully!');
-                  setServerLog('');
-                  startHeartbeat();
-                  return;
-                }
-              } catch (connectErr) {
-                console.error('[auto-start] Connect failed:', connectErr);
-                if (!cancelled && attempt < retries) {
-                  await new Promise(r => setTimeout(r, 1500));
-                  continue;
-                }
-              }
-            } else if (attempt < retries) {
-              console.log('[auto-start] Server not ready, retrying in 2s...');
-              await new Promise(r => setTimeout(r, 2000));
-              continue;
-            }
-          } else if (attempt < retries) {
-            console.log('[auto-start] Server not running, retrying in 2s...');
-            await new Promise(r => setTimeout(r, 2000));
-            continue;
-          }
-        } catch (err) {
-          console.error(`[auto-start] Attempt ${attempt + 1} failed:`, err);
-          if (!cancelled) fetchCodexCandidates();
-          if (attempt < retries) {
-            await new Promise(r => setTimeout(r, 2000));
-            continue;
-          }
-        }
-      }
-      console.log('[auto-start] All attempts exhausted');
-      if (!cancelled) setServerStarting(false);
+    let unlisten: (() => void) | null = null;
+    listen<CodexAuthStatus>('codex-auth-complete', (event) => {
+      applyCodexAuthStatus(event.payload);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+
+    return () => {
+      unlisten?.();
     };
-
-    (async () => {
-      const loopbackEndpoint = resolveLoopbackServerEndpoint(url);
-      if (loopbackEndpoint) {
-        try {
-          const portOpen = await invoke<boolean>('probe_tcp_port', loopbackEndpoint);
-          if (cancelled) return;
-
-          if (!portOpen) {
-            console.log('[startup] Local server port closed, skipping websocket probe and auto-starting...');
-            await autoStartServer();
-            return;
-          }
-
-          console.log('[startup] Local server port already open, connecting without proxy probe');
-          try {
-            await handleConnect(url);
-            if (cancelled) return;
-            try {
-              const status = await invoke<{ running: boolean; pid: number | null }>('get_codex_server_status');
-              if (!cancelled && status.running) {
-                serverManagedRef.current = true;
-                setServerRunning(true);
-                startHeartbeat();
-              }
-            } catch { /* ignore */ }
-            return;
-          } catch (loopbackConnectErr) {
-            console.log('[startup] Loopback direct connect failed, falling back to websocket probe:', loopbackConnectErr);
-            clientRef.current.disconnect();
-          }
-        } catch (probePortErr) {
-          console.error('[startup] Loopback port probe failed, falling back to websocket probe:', probePortErr);
-        }
-      }
-
-      console.log('[startup] Probing server at', url);
-      try {
-        await clientRef.current.connect(url, { autoReconnect: false });
-        console.log('[startup] Connection probe succeeded - server already running');
-        if (cancelled) return;
-        const result = await clientRef.current.listThreads({ limit: 50 });
-        startTransition(() => {
-          setThreads(result.data);
-          setNextCursor(result.nextCursor);
-        });
-        let availableModels: ModelInfo[] = [];
-        try {
-          const m = await clientRef.current.listModels();
-          availableModels = m;
-          setModels(m);
-        } catch { /* models optional */ }
-        let account: AccountInfo = null;
-        try {
-          account = await refreshAccountInfo();
-        } catch { /* account optional */ }
-        const config = await refreshCodexConfig();
-        const configuredModel = getStringConfigValue(config, 'model');
-        const nextModel = pickPreferredCodexModel(
-          filterCodexModelsForAccount(availableModels, account),
-          configuredModel,
-        );
-        const activeThreadId = selectedThreadRef.current;
-        if (nextModel && (!activeThreadId || getThreadProvider(activeThreadId) !== 'claude')) {
-          setSelectedModel(nextModel);
-        }
-        // Check if we're managing this server process
-        try {
-          const status = await invoke<{ running: boolean; pid: number | null }>('get_codex_server_status');
-          if (!cancelled && status.running) {
-            serverManagedRef.current = true;
-            setServerRunning(true);
-            startHeartbeat();
-          }
-        } catch { /* ignore */ }
-      } catch (probeErr) {
-        console.log('[startup] Probe failed, server not running:', probeErr);
-        clientRef.current.disconnect();
-        if (cancelled) return;
-        console.log('[startup] Checking if server process exists...');
-        try {
-          const status = await invoke<{ running: boolean; pid: number | null }>('get_codex_server_status');
-          console.log('[startup] Server process status:', status);
-          if (cancelled) return;
-          if (status.running) {
-            serverManagedRef.current = true;
-            setServerRunning(true);
-            const ready = await waitForServerReady(url, 15, 600);
-            if (!cancelled && ready) {
-              try {
-                await handleConnect(url);
-                if (!cancelled) {
-                  setServerLog('');
-                  startHeartbeat();
-                }
-              } catch { /* auto-reconnect will handle */ }
-            }
-          } else {
-            console.log('[startup] Server process not found, auto-starting...');
-            await autoStartServer();
-          }
-        } catch (statusErr) {
-          console.error('[startup] get_codex_server_status failed:', statusErr);
-          if (!cancelled) {
-            console.log('[startup] Falling back to auto-start...');
-            await autoStartServer();
-          }
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [applyCodexAuthStatus, refreshCodexAuthStatus]);
 
   useEffect(() => {
     return () => {
-      if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     };
   }, []);
 
   const handleDisconnect = () => {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
     clientRef.current.disconnect();
     setThreads([]);
     setSelectedThread(null);
@@ -3071,6 +2789,10 @@ export function App() {
           : Promise.resolve({ data: [] as ThreadSummary[], nextCursor: null as string | null }),
         showArchived ? Promise.resolve([] as ThreadSummary[]) : claudeClientRef.current.listSessions(),
       ]);
+      // Track local Codex OAuth sessions (from SQLite, model_provider='codex')
+      localCodexSessionIdsRef.current = new Set(
+        claudeThreads.filter((t) => t.modelProvider === 'codex').map((t) => t.id),
+      );
       const mergedThreads = [...codexResult.data, ...claudeThreads]
         .reduce<ThreadSummary[]>((acc, thread) => {
           if (!acc.some((entry) => entry.id === thread.id)) {
@@ -3198,6 +2920,7 @@ export function App() {
     const isClaudeThread =
       threadSummary?.modelProvider === 'claude' ||
       cachedDetail?.modelProvider === 'claude';
+    const isLocalCodexThread = localCodexSessionIdsRef.current.has(id);
     const configPromise = getChatConfig(id).catch(() => null);
 
     selectedThreadRef.current = id;
@@ -3267,13 +2990,13 @@ export function App() {
 
     const loadFreshThread = async () => {
       try {
-        if (isClaudeThread) {
+        if (isClaudeThread || isLocalCodexThread) {
           const [detail, config] = await Promise.all([
             claudeClientRef.current.getSession(id),
             configPromise,
           ]);
           if (!detail) {
-            throw new Error('Failed to load Claude thread');
+            throw new Error('Failed to load local thread');
           }
           const enrichedDetail = applyThreadConfig(detail, config);
 
@@ -3443,6 +3166,11 @@ export function App() {
   const handleInterrupt = useCallback(async () => {
     if (isClaudeModel(selectedModel)) {
       await claudeClientRef.current.interrupt();
+      setIsAgentActive(false);
+      return;
+    }
+    if (selectedThread && localCodexSessionIdsRef.current.has(selectedThread)) {
+      await codexAbortMessage().catch(() => {});
       setIsAgentActive(false);
       return;
     }
@@ -3739,6 +3467,196 @@ export function App() {
     return true;
   }, [activeProjectCwd, extractThreadHistory, reasoning, selectedModel, selectedThread, isClaudeModel]);
 
+  // ── Codex OAuth in-thread helper ──
+
+  const handleCodexOAuthSendInThread = useCallback(async (
+    prompt: string,
+    options?: { threadId?: string; displayText?: string },
+  ): Promise<boolean> => {
+    const targetThreadId = options?.threadId ?? selectedThread;
+    if (!targetThreadId) return false;
+    const displayText = options?.displayText ?? prompt;
+
+    const session = await claudeClientRef.current.getSession(targetThreadId);
+    if (!session) return false;
+
+    const existingMessages = await getClaudeMessages(targetThreadId).catch(() => []);
+    const history = existingMessages.map((m) => ({ role: m.role, content: m.content }));
+
+    if (session.name === 'New Codex Chat' && displayText.length > 0) {
+      const title = displayText.slice(0, 60) + (displayText.length > 60 ? '...' : '');
+      await claudeClientRef.current.renameSession(targetThreadId, title).catch(() => {});
+      startTransition(() => {
+        setThreads((prev) => prev.map((t) =>
+          t.id === targetThreadId ? { ...t, name: title, preview: title } : t,
+        ));
+      });
+    }
+
+    const userMsgId = `codex-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const assistantMsgId = `codex-asst-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    await addClaudeMessage({ id: userMsgId, sessionId: targetThreadId, role: 'user', content: displayText }).catch(() => {});
+
+    setIsSending(true);
+    setIsAgentActive(true);
+    setThreadDetail((prev) => {
+      if (!prev || prev.id !== targetThreadId) return prev;
+      const turns = prev.turns ? [...prev.turns] : [];
+      turns.push({
+        id: `codex-turn-${Date.now()}`,
+        status: 'inProgress',
+        items: [{ type: 'userMessage', id: userMsgId, content: [{ type: 'text', text: displayText }] }],
+      });
+      return { ...prev, turns };
+    });
+
+    let accumulated = '';
+    let chunkUnlisten: (() => void) | null = null;
+    let doneUnlisten: (() => void) | null = null;
+    let errorUnlisten: (() => void) | null = null;
+
+    try {
+      chunkUnlisten = await listen<{ session_id: string; event_type: string; data: string }>('codex-stream-chunk', (event) => {
+        if (event.payload.session_id !== targetThreadId) return;
+        if (event.payload.event_type === 'text') {
+          accumulated += event.payload.data;
+          setThreadDetail((prev) => {
+            if (!prev?.turns || prev.id !== targetThreadId) return prev;
+            const turns = [...prev.turns];
+            const lastTurn = turns[turns.length - 1];
+            if (!lastTurn) return prev;
+            const hasAgent = lastTurn.items.some((it) => it.type === 'agentMessage');
+            if (hasAgent) {
+              turns[turns.length - 1] = { ...lastTurn, items: lastTurn.items.map((it) => it.type === 'agentMessage' ? { ...it, text: accumulated } : it) };
+            } else {
+              turns[turns.length - 1] = { ...lastTurn, items: [...lastTurn.items, { type: 'agentMessage', id: assistantMsgId, text: accumulated }] };
+            }
+            return { ...prev, turns };
+          });
+        } else if (event.payload.event_type === 'error') {
+          setToast({ msg: `Codex error: ${event.payload.data}`, type: 'error' });
+        }
+      });
+
+      doneUnlisten = await listen<{ session_id: string; input_tokens?: number; output_tokens?: number; model?: string; stop_reason?: string }>('codex-stream-done', (event) => {
+        if (event.payload.session_id !== targetThreadId) return;
+        if (accumulated.trim()) {
+          void addClaudeMessage({
+            id: assistantMsgId,
+            sessionId: targetThreadId,
+            role: 'assistant',
+            content: accumulated,
+            tokenUsage: {
+              input_tokens: event.payload.input_tokens ?? 0,
+              output_tokens: event.payload.output_tokens ?? 0,
+            },
+          }).catch(() => {});
+        }
+        setThreadDetail((prev) => {
+          if (!prev?.turns || prev.id !== targetThreadId) return prev;
+          const turns = [...prev.turns];
+          const last = turns[turns.length - 1];
+          if (last?.status === 'inProgress') {
+            turns[turns.length - 1] = { ...last, status: 'completed' };
+          }
+          return { ...prev, turns };
+        });
+        setIsAgentActive(false);
+        setIsSending(false);
+      });
+
+      errorUnlisten = await listen<{ session_id: string; error: string }>('codex-stream-error', (event) => {
+        if (event.payload.session_id !== targetThreadId) return;
+        setToast({ msg: `Codex error: ${event.payload.error}`, type: 'error' });
+        setThreadDetail((prev) => {
+          if (!prev?.turns || prev.id !== targetThreadId) return prev;
+          const turns = [...prev.turns];
+          const last = turns[turns.length - 1];
+          if (last?.status === 'inProgress') {
+            turns[turns.length - 1] = { ...last, status: 'failed' };
+          }
+          return { ...prev, turns };
+        });
+        setIsAgentActive(false);
+        setIsSending(false);
+      });
+
+      await codexSendMessage({
+        model: selectedModel || 'codex-mini-latest',
+        prompt,
+        history,
+        sessionId: targetThreadId,
+      });
+    } catch (e) {
+      setToast({ msg: `Codex error: ${String(e)}`, type: 'error' });
+      setThreadDetail((prev) => {
+        if (!prev?.turns || prev.id !== targetThreadId) return prev;
+        const turns = [...prev.turns];
+        const last = turns[turns.length - 1];
+        if (last?.status === 'inProgress') {
+          turns[turns.length - 1] = { ...last, status: 'failed' };
+        }
+        return { ...prev, turns };
+      });
+      setIsAgentActive(false);
+      setIsSending(false);
+    } finally {
+      chunkUnlisten?.();
+      doneUnlisten?.();
+      errorUnlisten?.();
+    }
+
+    return true;
+  }, [selectedThread, selectedModel]);
+
+  const handleStartNewCodexOAuthThreadWithMessage = useCallback(async (
+    text: string,
+    options?: { history?: CarryoverMessage[]; sourceThreadId?: string | null },
+  ) => {
+    try {
+      const model = selectedModel && !isClaudeModel(selectedModel) ? selectedModel : 'codex-mini-latest';
+      const id = await claudeClientRef.current.createSession({
+        title: 'New Codex Chat',
+        model,
+        workingDirectory: activeProjectCwd ?? undefined,
+        modelProvider: 'codex',
+      });
+      localCodexSessionIdsRef.current = new Set([...localCodexSessionIdsRef.current, id]);
+
+      const carryoverPrompt = options?.history?.length
+        ? buildCrossProviderCodexPrompt(text, options.history)
+        : { prompt: text, compacted: false, compactedMessages: 0 };
+
+      const newThread: ThreadSummary = {
+        id,
+        name: 'New Codex Chat',
+        preview: 'New Codex Chat',
+        ephemeral: false,
+        modelProvider: 'codex',
+        cwd: activeProjectCwd ?? undefined,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      applyNewThreadSelection(newThread, activeProjectCwd ?? undefined);
+
+      await handleCodexOAuthSendInThread(carryoverPrompt.prompt, {
+        threadId: id,
+        displayText: text,
+      });
+
+      if (carryoverPrompt.compacted) {
+        setToast({ msg: `Auto-compacted ${carryoverPrompt.compactedMessages} earlier messages for the model handoff.`, type: 'info' });
+      }
+
+      await handleListThreads();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setToast({ msg: `Codex error: ${msg}`, type: 'error' });
+      setIsAgentActive(false);
+    }
+  }, [activeProjectCwd, handleCodexOAuthSendInThread, handleListThreads, isClaudeModel, selectedModel, applyNewThreadSelection]);
+
   const handleApproval = useCallback(async (request: ApprovalRequest, decision: ApprovalDecision) => {
     try {
       if (request.method === 'item/permissions/requestApproval') {
@@ -3796,7 +3714,7 @@ export function App() {
 
   const handleArchiveThread = useCallback(async (threadId: string) => {
     try {
-      if (getThreadProvider(threadId) === 'claude') {
+      if (getThreadProvider(threadId) === 'claude' || localCodexSessionIdsRef.current.has(threadId)) {
         await claudeClientRef.current.archiveSession(threadId);
       } else {
         await clientRef.current.archiveThread(threadId);
@@ -3815,7 +3733,7 @@ export function App() {
   const handleRenameThread = useCallback(async () => {
     if (!selectedThread || !editNameValue.trim()) return;
     try {
-      if (getThreadProvider(selectedThread) === 'claude') {
+      if (getThreadProvider(selectedThread) === 'claude' || localCodexSessionIdsRef.current.has(selectedThread)) {
         await claudeClientRef.current.renameSession(selectedThread, editNameValue.trim());
         setThreadDetail((prev) => (
           prev && prev.id === selectedThread
@@ -3890,7 +3808,7 @@ export function App() {
       return;
     }
     try {
-      if (getThreadProvider(renamingThreadId) === 'claude') {
+      if (getThreadProvider(renamingThreadId) === 'claude' || localCodexSessionIdsRef.current.has(renamingThreadId)) {
         await claudeClientRef.current.renameSession(renamingThreadId, renamingThreadValue.trim());
         startTransition(() => {
           setThreads((prev) => prev.map((thread) => (
@@ -4355,7 +4273,26 @@ export function App() {
       return;
     }
 
-    // Codex model: steer active turn with follow-up
+    // Codex OAuth path: use HTTP SSE when WebSocket is not connected or thread is local
+    const isLocalCodex = selectedThread ? localCodexSessionIdsRef.current.has(selectedThread) : false;
+    if (!usingClaude && (connState !== 'connected' || isLocalCodex)) {
+      if (isSending) {
+        setToast({ msg: 'Codex is still responding. Please wait.', type: 'info' });
+        return;
+      }
+      if (!selectedThread || !isLocalCodex) {
+        // Create a new Codex OAuth thread
+        await handleStartNewCodexOAuthThreadWithMessage(finalText, {
+          history: selectedThread && selectedThreadProvider === 'codex' ? extractThreadHistory() : undefined,
+          sourceThreadId: selectedThread,
+        });
+        return;
+      }
+      await handleCodexOAuthSendInThread(finalText);
+      return;
+    }
+
+    // Codex WebSocket model: steer active turn with follow-up
     if (isAgentActive && selectedThread && threadDetail) {
       const activeTurn = threadDetail.turns?.find((turn) => turn.status === 'inProgress');
       if (activeTurn) {
@@ -4397,16 +4334,20 @@ export function App() {
 
     await handleSendMessage(finalText);
   }, [
+    connState,
     enqueuePendingMessage,
     handleClaudeSendInThread,
+    handleCodexOAuthSendInThread,
     handleSendMessage,
     handleShellCommand,
     handleStartNewClaudeThreadWithMessage,
+    handleStartNewCodexOAuthThreadWithMessage,
     handleStartNewThreadWithMessage,
     isAgentActive,
     isClaudeModel,
     isSending,
     getThreadProvider,
+    extractThreadHistory,
     refreshThreadDetail,
     selectedModel,
     selectedThread,
@@ -4632,11 +4573,26 @@ export function App() {
     () => threads.filter((thread) => pinnedThreadIdSet.has(thread.id)),
     [threads, pinnedThreadIdSet],
   );
-  const codexNotReady = connState !== 'connected' && !isClaudeModel(selectedModel);
-  const codexReconnecting = codexNotReady && (connState === 'connecting' || reconnectAttemptRef.current > 0);
+  // Codex sends can use either the managed WebSocket backend or local OAuth.
+  // Local Codex sessions always require a valid OAuth login.
+  const isLocalCodexSelected = !!selectedThread && localCodexSessionIdsRef.current.has(selectedThread);
+  const codexNotReady =
+    !isClaudeModel(selectedModel) &&
+    !codexOAuthReady &&
+    (isLocalCodexSelected || connState !== 'connected');
+  const codexReconnecting =
+    codexNotReady &&
+    !isLocalCodexSelected &&
+    (connState === 'connecting' || reconnectAttemptRef.current > 0);
   const composerDisabled = isShowingPreviousThreadWhileLoading || codexNotReady;
   const composerPlaceholder = codexNotReady
-    ? (codexReconnecting ? 'Connecting to Codex server...' : 'Codex server not connected')
+    ? (
+      codexReconnecting
+        ? 'Connecting to Codex server...'
+        : isLocalCodexSelected
+        ? 'Codex login required — log in via Settings → Connections'
+        : 'Codex unavailable — connect the server or log in via Settings → Connections'
+    )
     : isShowingPreviousThreadWhileLoading
     ? 'Loading selected thread...'
     : isProcessing
@@ -5736,7 +5692,7 @@ export function App() {
 
   return (
     <>
-      {appPhase !== 'startup' && (<>
+      {(<>
       <div className="app-layout">
         {/* Sidebar */}
         <ThreadSidebar
@@ -5807,7 +5763,7 @@ export function App() {
           {sidebarView === 'settings' ? (
             <div className="main-content-body">
               <div className="main-content-primary">
-                <SettingsView url={url} onUrlChange={setUrl} connState={connState} accountInfo={accountInfo} rateLimits={rateLimits} mcpServers={mcpServers} client={clientRef.current} theme={theme} onThemeChange={setTheme} codexConfig={codexConfig} onWriteConfig={async (key, value) => { await writeConfigValueWithFallback(key, null, value); await refreshCodexConfig(); }} onRefreshMcp={refreshMcpServers} onConnect={(wsUrl) => void handleConnect(wsUrl)} onDisconnect={handleDisconnect} uiFontSize={uiFontSize} onUiFontSizeChange={setUiFontSize} codeFontSize={codeFontSize} onCodeFontSizeChange={setCodeFontSize} notificationPref={notificationPref} onNotificationPrefChange={setNotificationPref} themePreset={themePreset} onThemePresetChange={setThemePreset} themeConfig={themeConfig} onThemeConfigChange={setThemeConfig} pointerCursor={pointerCursor} onPointerCursorChange={setPointerCursor} onAutonomyModeChange={handleAutonomyModeChange} autonomyMode={autonomyMode} isUpdatingAutonomy={isUpdatingAutonomy} serverStarting={serverStarting} serverRunning={serverRunning} serverLog={serverLog} codexBinPath={codexBinPath} onCodexBinPathChange={setCodexBinPath} codexCandidates={codexCandidates} onStartServer={handleStartServer} onStopServer={handleStopServer} onBrowseCodexBinary={handleBrowseCodexBinary} windowControls={<WindowControls />} />
+                <SettingsView url={url} onUrlChange={setUrl} connState={connState} accountInfo={accountInfo} rateLimits={rateLimits} mcpServers={mcpServers} client={clientRef.current} theme={theme} onThemeChange={setTheme} codexConfig={codexConfig} onWriteConfig={async (key, value) => { await writeConfigValueWithFallback(key, null, value); await refreshCodexConfig(); }} onRefreshMcp={refreshMcpServers} onConnect={(wsUrl) => void handleConnect(wsUrl)} onDisconnect={handleDisconnect} uiFontSize={uiFontSize} onUiFontSizeChange={setUiFontSize} codeFontSize={codeFontSize} onCodeFontSizeChange={setCodeFontSize} notificationPref={notificationPref} onNotificationPrefChange={setNotificationPref} themePreset={themePreset} onThemePresetChange={setThemePreset} themeConfig={themeConfig} onThemeConfigChange={setThemeConfig} pointerCursor={pointerCursor} onPointerCursorChange={setPointerCursor} onAutonomyModeChange={handleAutonomyModeChange} autonomyMode={autonomyMode} isUpdatingAutonomy={isUpdatingAutonomy} windowControls={<WindowControls />} />
               </div>
               {rightSidebarEl}
             </div>
@@ -6275,144 +6231,6 @@ export function App() {
       )}
       </>)}
 
-      {(appPhase === 'startup' || showServerDialog) && (
-        <div className={appPhase === 'startup' ? 'server-startup-page' : 'server-startup-overlay'}>
-          <WindowControls className="window-controls--floating" />
-          <div className="server-startup-card" onClick={e => e.stopPropagation()}>
-            <div className="server-startup-header">
-              <div className="server-startup-brand">
-                <svg width="22" height="22" viewBox="0 0 28 28" fill="none">
-                  <path d="M14 2L3 8v12l11 6 11-6V8L14 2z" fill="var(--accent-green)" opacity="0.12" stroke="var(--accent-green)" strokeWidth="1.2" />
-                  <path d="M14 8v12M8 11l6 3.5L20 11" stroke="var(--accent-green)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                <span className="server-startup-brand-text">Codex Desktop</span>
-              </div>
-              {serverStarting ? (
-                <div className="server-startup-badge server-startup-badge--loading">
-                  <span className="server-startup-badge-dot" />
-                  Starting
-                </div>
-              ) : serverRunning ? (
-                <div className="server-startup-badge server-startup-badge--ok">
-                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                    <path d="M3.5 7l2.5 2.5 4.5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  Connected
-                </div>
-              ) : (
-                <div className="server-startup-badge server-startup-badge--err">
-                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                    <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.2" />
-                    <path d="M7 4.5v3M7 9v.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                  </svg>
-                  Failed
-                </div>
-              )}
-            </div>
-
-            {serverStarting && (
-              <div className="server-startup-progress">
-                <div className="server-startup-progress-track">
-                  <div className="server-startup-progress-bar" />
-                </div>
-              </div>
-            )}
-
-            <h3 className="server-startup-title">
-              {serverStarting ? 'Starting App Server...' : serverRunning ? 'Establishing Connection...' : 'Unable to Start Server'}
-            </h3>
-            <p className="server-startup-desc">
-              {serverStarting
-                ? 'Launching the codex app-server process'
-                : serverRunning
-                ? 'Server is running, connecting to WebSocket'
-                : 'The codex binary was not found in PATH.'}
-            </p>
-
-            {serverLog && (
-              <code className="server-startup-log">{serverLog}</code>
-            )}
-
-            {!serverStarting && !serverRunning && (
-              <button className="server-startup-launch-btn" onClick={handleStartServer}>
-                <div className="server-startup-launch-btn-icon">
-                  <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-                    <path d="M4 2.5l13 7.5-13 7.5z" fill="currentColor" />
-                  </svg>
-                </div>
-                <div className="server-startup-launch-btn-text">
-                  <span className="server-startup-launch-btn-title">Start Server</span>
-                  <span className="server-startup-launch-btn-sub">
-                    {codexBinPath
-                      ? codexBinPath.length > 45 ? '...' + codexBinPath.slice(-42) : codexBinPath
-                      : 'Launch codex app-server as child process'}
-                  </span>
-                </div>
-              </button>
-            )}
-
-            <div className="server-startup-config">
-              {!serverStarting && !serverRunning && (
-                <div className="server-startup-config-row">
-                  <span className="server-startup-config-label">Binary</span>
-                  <div className="server-startup-config-field">
-                    <input
-                      type="text"
-                      className="server-startup-pathpicker-input"
-                      placeholder="codex (from PATH)"
-                      value={codexBinPath}
-                      onChange={e => setCodexBinPath(e.target.value)}
-                      spellCheck={false}
-                    />
-                    <button className="server-startup-pathpicker-browse" onClick={handleBrowseCodexBinary} title="Browse for codex binary">
-                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                        <path d="M2 3.5h3.5l1.5 1.5H12v6.5H2z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              )}
-              <div className="server-startup-config-row">
-                <span className="server-startup-config-label">Endpoint</span>
-                <code className="server-startup-config-value">{url}</code>
-              </div>
-              {!serverStarting && !serverRunning && codexCandidates.length > 0 && (
-                <div className="server-startup-config-row server-startup-config-row--top">
-                  <span className="server-startup-config-label">Detected</span>
-                  <div className="server-startup-candidates">
-                    {codexCandidates.map(p => (
-                      <button
-                        key={p}
-                        className="server-startup-candidate"
-                        onClick={() => setCodexBinPath(p)}
-                        title={p}
-                      >
-                        <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-                          <path d="M2 6l3 3 5-5.5" stroke="var(--accent-green)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        <span className="server-startup-candidate-path">{p}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {!serverStarting && (
-              <div className="server-startup-actions">
-                {serverRunning && connState !== 'connected' && (
-                  <button className="btn-primary server-startup-btn" onClick={() => void handleConnect(url)}>
-                    Reconnect
-                  </button>
-                )}
-                <button className="server-startup-btn-ghost" onClick={() => { setShowServerDialog(false); setAppPhase('main'); }}>
-                  Manual Setup
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {toast && (
         <div

@@ -46,15 +46,6 @@ export function SettingsView({
   onAutonomyModeChange,
   autonomyMode: externalAutonomyMode,
   isUpdatingAutonomy,
-  serverStarting,
-  serverRunning,
-  serverLog,
-  codexBinPath,
-  onCodexBinPathChange,
-  codexCandidates,
-  onStartServer,
-  onStopServer,
-  onBrowseCodexBinary,
   windowControls,
 }: {
   url: string;
@@ -86,15 +77,6 @@ export function SettingsView({
   onAutonomyModeChange?: (mode: string) => void;
   autonomyMode: AutonomyModeValue;
   isUpdatingAutonomy?: boolean;
-  serverStarting?: boolean;
-  serverRunning?: boolean;
-  serverLog?: string;
-  codexBinPath?: string;
-  onCodexBinPathChange?: (path: string) => void;
-  codexCandidates?: string[];
-  onStartServer?: () => void;
-  onStopServer?: () => void;
-  onBrowseCodexBinary?: () => void;
   windowControls?: import('react').ReactNode;
 }) {
   const { t, i18n } = useTranslation();
@@ -377,21 +359,7 @@ export function SettingsView({
         )}
 
         {tab === 'connections' && (
-          <ConnectionsPanel
-            currentUrl={url}
-            connState={connState}
-            onConnect={(wsUrl) => { onUrlChange(wsUrl); onConnect?.(wsUrl); }}
-            onDisconnect={() => onDisconnect?.()}
-            serverStarting={serverStarting}
-            serverRunning={serverRunning}
-            serverLog={serverLog}
-            codexBinPath={codexBinPath}
-            onCodexBinPathChange={onCodexBinPathChange}
-            codexCandidates={codexCandidates}
-            onStartServer={onStartServer}
-            onStopServer={onStopServer}
-            onBrowseCodexBinary={onBrowseCodexBinary}
-          />
+          <ConnectionsPanel />
         )}
 
         {tab === 'appearance' && (
