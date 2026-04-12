@@ -5,341 +5,18 @@
 
 mod automation_scheduler;
 mod claude_api;
+mod codex_api;
+mod codex_oauth;
 mod database;
 mod dynamic_tools;
 
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
-use std::process::{Child, Command};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
-// ── Codex app-server (WebSocket `app-server` child) ───────────────────────────
-static CODEX_SERVER_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
-static CODEX_BINARY_PATH: Mutex<Option<String>> = Mutex::new(None);
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodexServerStatus {
-    pub running: bool,
-    pub pid: Option<u32>,
-}
-
-fn build_codex_app_server_args(listen_url: &str, include_session_source: bool) -> Vec<String> {
-    let mut args = vec![
-        "app-server".to_string(),
-        "--listen".to_string(),
-        listen_url.to_string(),
-    ];
-
-    if include_session_source {
-        args.push("--session-source".to_string());
-        args.push("desktop".to_string());
-    }
-
-    args
-}
-
-fn app_server_supports_session_source(binary: &str) -> bool {
-    let output = if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(["/C", binary, "app-server", "--help"])
-            .output()
-    } else {
-        Command::new(binary).args(["app-server", "--help"]).output()
-    };
-
-    match output {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let supported =
-                stdout.contains("--session-source") || stderr.contains("--session-source");
-
-            eprintln!(
-                "[codex-server] app-server --help probe: status={}, session-source-supported={supported}",
-                output.status
-            );
-
-            supported
-        }
-        Err(e) => {
-            eprintln!(
-                "[codex-server] Failed to probe app-server --help for session-source support: {e}"
-            );
-            false
-        }
-    }
-}
-
-fn spawn_codex_app_server(binary: &str, args: &[String]) -> std::io::Result<Child> {
-    if cfg!(target_os = "windows") {
-        let mut command = Command::new("cmd");
-        command.arg("/C").arg(binary).args(args);
-        command.env("CODEX_DESKTOP", "1").spawn()
-    } else {
-        let mut command = Command::new(binary);
-        command.args(args);
-        command.env("CODEX_DESKTOP", "1").spawn()
-    }
-}
-
-/// Spawns `codex app-server` if none is running; reuses an existing healthy child and remembers the binary path for later starts.
-#[tauri::command]
-fn start_codex_server(
-    port: Option<u16>,
-    codex_path: Option<String>,
-) -> Result<CodexServerStatus, String> {
-    eprintln!("[codex-server] start_codex_server called: port={port:?}, codex_path={codex_path:?}");
-
-    let mut guard = CODEX_SERVER_PROCESS
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
-
-    if let Some(ref mut child) = *guard {
-        match child.try_wait() {
-            Ok(None) => {
-                let pid = child.id();
-                eprintln!("[codex-server] Existing process alive, pid={pid}");
-                return Ok(CodexServerStatus {
-                    running: true,
-                    pid: Some(pid),
-                });
-            }
-            Ok(Some(status)) => {
-                eprintln!("[codex-server] Existing process exited with status: {status}");
-                *guard = None;
-            }
-            Err(e) => {
-                eprintln!("[codex-server] Error checking existing process: {e}");
-                *guard = None;
-            }
-        }
-    }
-
-    let listen_port = port.unwrap_or(4500);
-    let listen_url = format!("ws://127.0.0.1:{listen_port}");
-
-    let binary = codex_path
-        .or_else(|| CODEX_BINARY_PATH.lock().ok().and_then(|g| g.clone()))
-        .unwrap_or_else(|| "codex".to_string());
-
-    eprintln!("[codex-server] Spawning: binary={binary:?}, listen_url={listen_url}");
-    if cfg!(target_os = "windows") {
-        eprintln!("[codex-server] Using cmd /C wrapper for Windows");
-    }
-
-    let include_session_source = app_server_supports_session_source(&binary);
-    if !include_session_source {
-        eprintln!("[codex-server] Current codex CLI does not support --session-source; starting without it");
-    }
-    let app_server_args = build_codex_app_server_args(&listen_url, include_session_source);
-
-    let mut child = spawn_codex_app_server(&binary, &app_server_args).map_err(|e| {
-        eprintln!("[codex-server] SPAWN FAILED: {e}");
-        format!("Failed to start codex app-server: {e}")
-    })?;
-
-    std::thread::sleep(Duration::from_millis(300));
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            eprintln!("[codex-server] Process exited immediately after spawn: {status}");
-            return Err(format!(
-                "codex app-server exited immediately with status {status}. Check the desktop logs for CLI details."
-            ));
-        }
-        Ok(None) => {}
-        Err(e) => {
-            eprintln!("[codex-server] Failed to probe freshly spawned process: {e}");
-        }
-    }
-
-    if let Ok(mut path_guard) = CODEX_BINARY_PATH.lock() {
-        *path_guard = Some(binary.clone());
-    }
-
-    let pid = child.id();
-    eprintln!("[codex-server] Process spawned successfully: pid={pid}, binary={binary}");
-    *guard = Some(child);
-
-    Ok(CodexServerStatus {
-        running: true,
-        pid: Some(pid),
-    })
-}
-
-/// Kills the managed app-server child if present; no-op when nothing was started from this process.
-#[tauri::command]
-fn stop_codex_server() -> Result<(), String> {
-    let mut guard = CODEX_SERVER_PROCESS
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
-
-    if let Some(mut child) = guard.take() {
-        child
-            .kill()
-            .map_err(|e| format!("Failed to kill process: {e}"))?;
-        let _ = child.wait();
-    }
-
-    Ok(())
-}
-
-/// Uses `try_wait` to detect a dead child so the UI does not assume the server is up after an external crash.
-#[tauri::command]
-fn get_codex_server_status() -> Result<CodexServerStatus, String> {
-    let mut guard = CODEX_SERVER_PROCESS
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
-
-    if let Some(ref mut child) = *guard {
-        match child.try_wait() {
-            Ok(None) => {
-                return Ok(CodexServerStatus {
-                    running: true,
-                    pid: Some(child.id()),
-                });
-            }
-            _ => {
-                *guard = None;
-            }
-        }
-    }
-
-    Ok(CodexServerStatus {
-        running: false,
-        pid: None,
-    })
-}
-
-#[tauri::command]
-fn probe_tcp_port(host: String, port: u16) -> Result<bool, String> {
-    let address = format!("{host}:{port}");
-    let timeout = Duration::from_millis(250);
-
-    let addrs = address
-        .to_socket_addrs()
-        .map_err(|e| format!("Failed to resolve {address}: {e}"))?;
-
-    for addr in addrs {
-        if TcpStream::connect_timeout(&addr, timeout).is_ok() {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
-}
-
-fn codex_exe_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "codex.exe"
-    } else {
-        "codex"
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::build_codex_app_server_args;
-
-    #[test]
-    fn build_codex_app_server_args_skips_session_source_when_unsupported() {
-        let args = build_codex_app_server_args("ws://127.0.0.1:4500", false);
-
-        assert_eq!(
-            args,
-            vec![
-                "app-server".to_string(),
-                "--listen".to_string(),
-                "ws://127.0.0.1:4500".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn build_codex_app_server_args_includes_session_source_when_supported() {
-        let args = build_codex_app_server_args("ws://127.0.0.1:4500", true);
-
-        assert_eq!(
-            args,
-            vec![
-                "app-server".to_string(),
-                "--listen".to_string(),
-                "ws://127.0.0.1:4500".to_string(),
-                "--session-source".to_string(),
-                "desktop".to_string(),
-            ]
-        );
-    }
-}
-
-/// Heuristic install locations (Cargo, npm, NVM, Homebrew, etc.) when `codex` is not on `PATH`.
-#[tauri::command]
-fn find_codex_candidates() -> Vec<String> {
-    let mut candidates = Vec::new();
-    let exe = codex_exe_name();
-
-    if let Some(home) = dirs_next::home_dir() {
-        let mut paths: Vec<PathBuf> = vec![
-            home.join(".cargo").join("bin").join(exe),
-            home.join(".local").join("bin").join("codex"),
-        ];
-
-        if cfg!(target_os = "windows") {
-            if let Ok(appdata) = std::env::var("APPDATA") {
-                paths.push(PathBuf::from(&appdata).join("npm").join("codex.cmd"));
-                paths.push(PathBuf::from(&appdata).join("npm").join(exe));
-            }
-            if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
-                paths.push(PathBuf::from(&localappdata).join("npm").join("codex.cmd"));
-                paths.push(PathBuf::from(&localappdata).join("npm").join(exe));
-            }
-        } else {
-            paths.push(PathBuf::from("/usr/local/bin/codex"));
-            paths.push(PathBuf::from("/opt/homebrew/bin/codex"));
-        }
-
-        if let Ok(nvm_dir) = std::env::var("NVM_DIR") {
-            let versions_dir = PathBuf::from(&nvm_dir).join("versions").join("node");
-            if let Ok(entries) = std::fs::read_dir(&versions_dir) {
-                for entry in entries.flatten() {
-                    let bin = entry.path().join("bin").join("codex");
-                    if bin.exists() {
-                        candidates.push(bin.to_string_lossy().to_string());
-                    }
-                }
-            }
-        }
-
-        for p in paths {
-            if p.exists() {
-                let s = p.to_string_lossy().to_string();
-                if !candidates.contains(&s) {
-                    candidates.push(s);
-                }
-            }
-        }
-    }
-
-    candidates
-}
-
-/// Blocking native file picker; returns the path chosen by the user (optional cancel).
-#[tauri::command]
-fn pick_codex_binary(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let mut builder = app.dialog().file().set_title("Select Codex Binary");
-
-    if cfg!(target_os = "windows") {
-        builder = builder.add_filter("Executable", &["exe", "cmd", "bat"]);
-    }
-
-    let result = builder.blocking_pick_file();
-    Ok(result.map(|p| p.to_string()))
-}
 
 // ── Git (subprocess `git` in `cwd`) ───────────────────────────────────────────
 
@@ -1344,16 +1021,7 @@ fn import_current_provider_config(app_type: String) -> Result<ImportedProviderCo
     }
 }
 
-// ── Process cleanup & Tauri entry ───────────────────────────────────────────
-
-fn cleanup_codex_server() {
-    if let Ok(mut guard) = CODEX_SERVER_PROCESS.lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
+// ── Tauri entry ──────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1404,12 +1072,6 @@ pub fn run() {
             get_system_info,
             list_project_folders,
             open_in_explorer,
-            start_codex_server,
-            stop_codex_server,
-            get_codex_server_status,
-            probe_tcp_port,
-            find_codex_candidates,
-            pick_codex_binary,
             read_claude_settings,
             write_claude_settings,
             read_codex_auth,
@@ -1419,6 +1081,15 @@ pub fn run() {
             automation_scheduler::sync_automation_scheduler,
             claude_api::claude_send_message,
             claude_api::claude_interrupt,
+            // Codex OAuth (OpenAI PKCE login)
+            codex_oauth::codex_get_auth_url,
+            codex_oauth::codex_check_auth,
+            codex_oauth::codex_handle_oauth_callback,
+            codex_oauth::codex_logout,
+            codex_oauth::codex_refresh_token,
+            // Codex Responses API (HTTP SSE)
+            codex_api::codex_send_message,
+            codex_api::codex_abort_message,
             // Database commands – settings
             database::db_get_setting,
             database::db_set_setting,
@@ -1485,9 +1156,5 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
-            if let tauri::RunEvent::Exit = event {
-                cleanup_codex_server();
-            }
-        });
+        .run(|_app, _event| {});
 }

@@ -242,7 +242,50 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
         );
     }
 
+    // Additive ALTER TABLE for claude_sessions — model_provider differentiates Claude vs Codex turns
+    let _ = conn.execute(
+        "ALTER TABLE claude_sessions ADD COLUMN model_provider TEXT NOT NULL DEFAULT 'claude'",
+        [],
+    );
+
     seed_model_pricing(conn)?;
+    Ok(())
+}
+
+// ── Internal (non-command) DB helpers — used by codex_oauth / codex_api ──────
+
+/// Read a single setting value. Returns `None` when the key is absent.
+pub fn get_setting(key: &str) -> Result<Option<String>, String> {
+    let guard = get_conn()?;
+    let conn = guard.as_ref().ok_or("DB not initialized")?;
+    conn.query_row(
+        "SELECT value FROM app_settings WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| format!("get_setting({key}): {e}"))
+}
+
+/// Insert or update a setting value.
+pub fn set_setting(key: &str, value: &str) -> Result<(), String> {
+    let guard = get_conn()?;
+    let conn = guard.as_ref().ok_or("DB not initialized")?;
+    conn.execute(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, strftime('%s','now'))
+         ON CONFLICT(key) DO UPDATE SET value=?2, updated_at=strftime('%s','now')",
+        params![key, value],
+    )
+    .map_err(|e| format!("set_setting({key}): {e}"))?;
+    Ok(())
+}
+
+/// Delete a setting (no-op if absent).
+pub fn delete_setting(key: &str) -> Result<(), String> {
+    let guard = get_conn()?;
+    let conn = guard.as_ref().ok_or("DB not initialized")?;
+    conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])
+        .map_err(|e| format!("delete_setting({key}): {e}"))?;
     Ok(())
 }
 
@@ -1268,6 +1311,7 @@ pub struct ClaudeSessionRow {
     pub working_directory: Option<String>,
     pub system_prompt: Option<String>,
     pub is_archived: i64,
+    pub model_provider: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -1280,12 +1324,14 @@ pub fn db_create_claude_session(
     provider_id: Option<String>,
     working_directory: Option<String>,
     system_prompt: Option<String>,
+    model_provider: Option<String>,
 ) -> Result<(), String> {
     let guard = get_conn()?;
     let conn = guard.as_ref().ok_or("DB not initialized")?;
+    let provider = model_provider.unwrap_or_else(|| "claude".to_string());
     conn.execute(
-        "INSERT INTO claude_sessions (id, title, model, provider_id, working_directory, system_prompt) VALUES (?1,?2,?3,?4,?5,?6)",
-        params![id, title.unwrap_or_else(|| "New Chat".into()), model, provider_id, working_directory, system_prompt],
+        "INSERT INTO claude_sessions (id, title, model, provider_id, working_directory, system_prompt, model_provider) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![id, title.unwrap_or_else(|| "New Chat".into()), model, provider_id, working_directory, system_prompt, provider],
     ).map_err(|e| format!("Insert: {e}"))?;
     Ok(())
 }
@@ -1295,7 +1341,7 @@ pub fn db_list_claude_sessions() -> Result<Vec<ClaudeSessionRow>, String> {
     let guard = get_conn()?;
     let conn = guard.as_ref().ok_or("DB not initialized")?;
     let mut stmt = conn
-        .prepare("SELECT id, title, model, provider_id, working_directory, system_prompt, is_archived, created_at, updated_at FROM claude_sessions WHERE is_archived = 0 ORDER BY updated_at DESC")
+        .prepare("SELECT id, title, model, provider_id, working_directory, system_prompt, is_archived, model_provider, created_at, updated_at FROM claude_sessions WHERE is_archived = 0 ORDER BY updated_at DESC")
         .map_err(|e| format!("Prepare: {e}"))?;
     let rows = stmt
         .query_map([], |r| {
@@ -1307,8 +1353,9 @@ pub fn db_list_claude_sessions() -> Result<Vec<ClaudeSessionRow>, String> {
                 working_directory: r.get(4)?,
                 system_prompt: r.get(5)?,
                 is_archived: r.get(6)?,
-                created_at: r.get(7)?,
-                updated_at: r.get(8)?,
+                model_provider: r.get::<_, Option<String>>(7)?.unwrap_or_else(|| "claude".to_string()),
+                created_at: r.get(8)?,
+                updated_at: r.get(9)?,
             })
         })
         .map_err(|e| format!("Query: {e}"))?
@@ -1322,12 +1369,13 @@ pub fn db_get_claude_session(id: String) -> Result<Option<ClaudeSessionRow>, Str
     let guard = get_conn()?;
     let conn = guard.as_ref().ok_or("DB not initialized")?;
     conn.query_row(
-        "SELECT id, title, model, provider_id, working_directory, system_prompt, is_archived, created_at, updated_at FROM claude_sessions WHERE id = ?1",
+        "SELECT id, title, model, provider_id, working_directory, system_prompt, is_archived, model_provider, created_at, updated_at FROM claude_sessions WHERE id = ?1",
         params![id],
         |r| Ok(ClaudeSessionRow {
             id: r.get(0)?, title: r.get(1)?, model: r.get(2)?, provider_id: r.get(3)?,
             working_directory: r.get(4)?, system_prompt: r.get(5)?, is_archived: r.get(6)?,
-            created_at: r.get(7)?, updated_at: r.get(8)?,
+            model_provider: r.get::<_, Option<String>>(7)?.unwrap_or_else(|| "claude".to_string()),
+            created_at: r.get(8)?, updated_at: r.get(9)?,
         }),
     ).optional().map_err(|e| format!("Query: {e}"))
 }
