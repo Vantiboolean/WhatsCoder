@@ -119,13 +119,16 @@ export class ClaudeClient {
     title?: string;
     model?: string;
     workingDirectory?: string;
+    modelProvider?: string;
   }): Promise<string> {
     const id = generateId();
+    const isCodexProvider = opts?.modelProvider === 'codex';
     await createClaudeSession({
       id,
       title: opts?.title,
-      model: normalizeClaudeModelId(opts?.model ?? this.getDefaultModel()),
+      model: isCodexProvider ? (opts?.model ?? 'codex-mini-latest') : normalizeClaudeModelId(opts?.model ?? this.getDefaultModel()),
       workingDirectory: opts?.workingDirectory,
+      modelProvider: opts?.modelProvider,
     });
     return id;
   }
@@ -283,7 +286,7 @@ function sessionToThreadSummary(session: ClaudeSessionRow): ThreadSummary {
     preview: session.title,
     name: session.title,
     ephemeral: false,
-    modelProvider: 'claude',
+    modelProvider: (session.model_provider ?? 'claude') as 'claude' | 'codex',
     cwd: session.working_directory ?? undefined,
     createdAt: session.created_at * 1000,
     updatedAt: session.updated_at * 1000,
@@ -331,7 +334,7 @@ function sessionToThreadDetail(
     preview: session.title,
     name: session.title,
     ephemeral: false,
-    modelProvider: 'claude',
+    modelProvider: (session.model_provider ?? 'claude') as 'claude' | 'codex',
     cwd: session.working_directory ?? undefined,
     createdAt: session.created_at * 1000,
     updatedAt: session.updated_at * 1000,

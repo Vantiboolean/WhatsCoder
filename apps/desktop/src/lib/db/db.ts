@@ -506,6 +506,7 @@ export interface ClaudeSessionRow {
   working_directory: string | null;
   system_prompt: string | null;
   is_archived: number;
+  model_provider: string;
   created_at: number;
   updated_at: number;
 }
@@ -517,6 +518,7 @@ export async function createClaudeSession(session: {
   providerId?: string;
   workingDirectory?: string;
   systemPrompt?: string;
+  modelProvider?: string;
 }): Promise<void> {
   return dbCreateClaudeSession({
     id: session.id,
@@ -525,6 +527,7 @@ export async function createClaudeSession(session: {
     providerId: session.providerId,
     workingDirectory: session.workingDirectory,
     systemPrompt: session.systemPrompt,
+    modelProvider: session.modelProvider ?? 'claude',
   });
 }
 

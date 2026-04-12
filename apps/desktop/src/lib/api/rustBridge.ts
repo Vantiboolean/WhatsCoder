@@ -103,6 +103,7 @@ interface BridgeClaudeSessionRow {
   workingDirectory: string | null;
   systemPrompt: string | null;
   isArchived: number;
+  modelProvider: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -481,6 +482,7 @@ export function dbCreateClaudeSession(s: {
   providerId?: string | null;
   workingDirectory?: string | null;
   systemPrompt?: string | null;
+  modelProvider?: string | null;
 }): Promise<void> {
   return invoke<void>('db_create_claude_session', {
     id: s.id,
@@ -489,6 +491,7 @@ export function dbCreateClaudeSession(s: {
     provider_id: s.providerId ?? null,
     working_directory: s.workingDirectory ?? null,
     system_prompt: s.systemPrompt ?? null,
+    model_provider: s.modelProvider ?? 'claude',
   });
 }
 
@@ -636,4 +639,66 @@ export function dbUpsertModelPricing(p: {
 
 export function dbDeleteModelPricing(modelId: string): Promise<void> {
   return invoke<void>('db_delete_model_pricing', { model_id: modelId });
+}
+
+// ── Codex OAuth ──────────────────────────────────────────────────────────────
+
+export interface CodexAuthStatus {
+  authenticated: boolean;
+  email: string | null;
+  plan: string | null;
+  accountId: string | null;
+}
+
+/** Returns the OpenAI OAuth URL; opens browser, then call codexHandleOAuthCallback. */
+export function codexGetAuthUrl(): Promise<string> {
+  return invoke<string>('codex_get_auth_url');
+}
+
+/** Returns current OAuth status without triggering any network calls. */
+export function codexCheckAuth(): Promise<CodexAuthStatus> {
+  return invoke<CodexAuthStatus>('codex_check_auth');
+}
+
+/** Starts a local HTTP listener on :1455, waits for the OAuth callback, exchanges code for tokens. */
+export function codexHandleOAuthCallback(): Promise<CodexAuthStatus> {
+  return invoke<CodexAuthStatus>('codex_handle_oauth_callback');
+}
+
+/** Clears all stored OAuth tokens. */
+export function codexLogout(): Promise<void> {
+  return invoke<void>('codex_logout');
+}
+
+/** Forces a token refresh using the stored refresh_token. */
+export function codexRefreshToken(): Promise<CodexAuthStatus> {
+  return invoke<CodexAuthStatus>('codex_refresh_token');
+}
+
+// ── Codex Responses API ──────────────────────────────────────────────────────
+
+export interface CodexSendConfig {
+  model?: string;
+  prompt: string;
+  history?: Array<{ role: string; content: string }>;
+  sessionId: string;
+  previousResponseId?: string | null;
+}
+
+/** Start a Codex streaming turn. Emits codex-stream-chunk / codex-stream-done / codex-stream-error events. */
+export function codexSendMessage(config: CodexSendConfig): Promise<void> {
+  return invoke<void>('codex_send_message', {
+    config: {
+      model: config.model ?? '',
+      prompt: config.prompt,
+      history: config.history ?? [],
+      session_id: config.sessionId,
+      previous_response_id: config.previousResponseId ?? null,
+    },
+  });
+}
+
+/** Set the abort flag — streaming loop exits after the current chunk. */
+export function codexAbortMessage(): Promise<void> {
+  return invoke<void>('codex_abort_message');
 }
